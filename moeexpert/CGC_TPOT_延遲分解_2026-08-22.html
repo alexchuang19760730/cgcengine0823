@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CGC TPOT 延遲分解（端到端長條圖）2026-08-22 · qwen36 15.6-17.1 t/s（submit-after 正確路徑）</title>
+<style>
+  :root {
+    --bg: #0f1420; --card: #171e2e; --ink: #e8ecf4; --sub: #9aa5b8;
+    --line: #2a3350;
+    /* qwen36 GPU */
+    --wr: #f0a45c; --small: #e86a6a; --ssm: #d98cf0; --sdpa: #7fb8f0; --bubble: #6b7aa8;
+    /* qwen36 CPU */
+    --cpu-r: #f0c25c; --cpu-g: #b8d95c; --cpu-s: #7fd4c0; --cpu-o: #8a97ad;
+    /* accent */
+    --accent: #ffd479; --good: #8fe3a0; --warn: #f08a8a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; padding: 32px 20px 60px; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: var(--sub); font-size: 14px; margin-bottom: 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 22px 24px; margin-bottom: 22px; }
+  .card h2 { font-size: 18px; margin: 0 0 4px; }
+  .card .desc { color: var(--sub); font-size: 13px; margin: 0 0 16px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 10px 0 18px; font-size: 12.5px; color: var(--sub); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .barwrap { margin-bottom: 10px; }
+  .barrow { display: flex; align-items: center; gap: 10px; }
+  .barlabel { width: 280px; font-size: 12.5px; color: var(--ink); flex-shrink: 0; line-height: 1.35; }
+  .barlabel small { display: block; color: var(--sub); font-size: 11px; }
+  .bar { flex: 1; height: 34px; border-radius: 8px; overflow: hidden; display: flex; background: #0c1019; border: 1px solid var(--line); }
+  .seg { height: 100%; display: flex; align-items: center; justify-content: center; font-size: 10.5px; color: #10141f; font-weight: 700; white-space: nowrap; overflow: hidden; min-width: 0; border-right: 1px solid rgba(15,20,32,.35); }
+  .seg.tiny { font-size: 0; }
+  .seg.tiny:hover { font-size: 10.5px; }
+  .total { font-size: 12px; color: var(--sub); text-align: right; margin: 4px 0 0 290px; }
+  .note { font-size: 12.5px; color: var(--sub); margin-top: 12px; line-height: 1.6; }
+  .note b { color: var(--ink); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--sub); font-weight: 600; font-size: 12px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .hl { color: var(--accent); font-weight: 700; }
+  .ceil { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .ceil .cl { width: 280px; font-size: 12.5px; flex-shrink: 0; }
+  .ceil .ctrack { flex: 1; height: 26px; background: #0c1019; border: 1px solid var(--line); border-radius: 7px; position: relative; }
+  .ceil .cfill { height: 100%; border-radius: 6px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 11px; font-weight: 700; color: #10141f; }
+  .tokbadge { margin-left: 10px; font-size: 12.5px; color: var(--ink); width: 150px; flex-shrink: 0; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 11px; margin-left: 6px; }
+  .tag.g { background: #1c3a24; color: #8fe3a0; }
+  .tag.r { background: #3a1c1c; color: #f08a8a; }
+  .tag.y { background: #3a321c; color: #e3cf8f; }
+  .proposal { border-left: 3px solid var(--accent); padding: 10px 14px; background: #141a29; border-radius: 0 8px 8px 0; margin: 14px 0; }
+  .proposal b { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>CGC · TPOT 端到端延遲分解（長條圖）</h1>
+<div class="sub">llama.cpp fork · M4 Max 16GB · 2026-08-22 · qwen36 IQ3_XXS -ngl 99 + cache 4.77GiB · submit-after 正確路徑（semaphore wake）</div>
+
+<!-- ============ 1. 08-22 正確路徑基線 ============ -->
+<div class="card">
+  <h2>① qwen36 IQ3_XXS（-ngl 99 + cache 4.77GiB）· submit-after 正確路徑</h2>
+  <p class="desc">wall ≈ 64.6 ms/step ≈ <b class="hl">15.47 tok/s</b>（short fibonacci）；長 coding prompt 16.53 t/s（60.5ms）。<b>輸出正確、bit-identical ✓</b>（同 seed 兩次 cmp 相同）。Expert-cache hit rate <b>94.9-97.8%</b>。08-19 報告的「25.07 t/s」為 submit-ahead（racy）或不同 build（libllama 0.0.5 + fused MoE FFN）——該路徑已被證實 remap race → 錯誤輸出，本 08-22 報告改用正確路徑數據。</p>
+
+  <div class="legend">
+    <span><i class="sw" style="background:var(--wr)"></i>GPU segment（Metal 執行 + pipeline drain）~45ms</span>
+    <span><i class="sw" style="background:var(--cpu-g)"></i>hook 序列化（ensure_slot + 冷讀 pread + remap）~14.5ms</span>
+    <span><i class="sw" style="background:var(--cpu-o)"></i>submit + sampler + build ~5ms</span>
+  </div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">wall 64.6ms · submit-after + semaphore（08-22 正確基線）<small>15.47 tok/s · bit-identical ✓ · 94.9% hit（short）</small></div>
+      <div class="bar">
+        <div class="seg" style="width:70%;background:var(--wr)" title="GPU 45ms = 41 segment × ~1.1ms（Metal FFN MoE + attn + topk 執行）。submit-after 序列化 → GPU 在每個 hook 期間 idle">45 GPU</div>
+        <div class="seg" style="width:22%;background:var(--cpu-g)" title="hook 14.5ms = 41 × 350µs（ensure_slot + 冷讀 pread + remap 寫入）。submit-after 讓 GPU 等待 hook → 每 segment idle 350µs">14.5 hook</div>
+        <div class="seg tiny" style="width:8%;background:var(--cpu-o)" title="submit 79µs×41 + sampler + graph build ≈ 5ms">5 submit</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">對比：semaphore wake 前（sched_yield poll）<small>8.35 tok/s · 同正確路徑</small></div>
+      <div class="bar">
+        <div class="seg" style="width:52%;background:var(--wr)" title="GPU 45ms">45 GPU</div>
+        <div class="seg" style="width:16%;background:var(--cpu-g)" title="hook 14ms">14 hook</div>
+        <div class="seg" style="width:28%;background:var(--bubble)" title="poll 23ms：while(cgc_done<target) sched_yield 旋轉（macOS 每 segment 0.5-1ms）">23 poll</div>
+        <div class="seg tiny" style="width:4%;background:var(--cpu-o)" title="submit+sampler 4ms">4</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">長 coding prompt（610 tok code review）<small>16.53 tok/s · 97.8% hit · prefill 15.6 t/s</small></div>
+      <div class="bar">
+        <div class="seg" style="width:72%;background:var(--wr)" title="GPU 45ms（wait 1150µs×41）">45 GPU</div>
+        <div class="seg" style="width:22%;background:var(--cpu-g)" title="hook 13.9ms（340µs×41）">14 hook</div>
+        <div class="seg tiny" style="width:6%;background:var(--cpu-o)" title="submit+sampler 4ms">4</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">對比：submit-ahead（racy，禁用）<small>22.8 tok/s · remap race → 錯誤輸出</small></div>
+      <div class="bar">
+        <div class="seg" style="width:78%;background:var(--wr)" title="GPU 44ms（無 hook 序列化，hook 與 GPU 重疊）">44 GPU</div>
+        <div class="seg tiny" style="width:15%;background:var(--cpu-g)" title="hook 重疊於 GPU，不計入 wall">hook↔GPU</div>
+        <div class="seg tiny" style="width:7%;background:var(--cpu-o)" title="submit+sampler 4ms">4</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note"><b>08-22 關鍵發現</b>：正確路徑（submit-after）與 racy 路徑（submit-ahead）的差異 = hook 序列化的 14ms。semaphore wake 已把 poll 23ms 歸零（8.35→15.6 t/s）。剩餘結構 = GPU 45ms（不可減，bandwidth/compute bound）+ hook 14ms（冷讀 drift 必付）+ submit 3ms。</p>
+</div>
+
+<!-- ============ 2. GPU 側歸因 ============ -->
+<div class="card">
+  <h2>② GPU 側延遲歸因（CGC-SEG wait/segment）</h2>
+  <p class="desc">GPU 是絕對主力：每 segment 執行 ~1.15ms（CGC_GLU_FUSED_DOWN 可降到 ~1.09ms），41 segment/step → GPU 牆 45-48ms。GPU 牆 = weight-read（bandwidth-bound）+ dispatch bubble（~2000 kernels fixed launch）。</p>
+
+  <div class="legend">
+    <span><i class="sw" style="background:var(--wr)"></i>GPU segment wait 1179µs（baseline）</span>
+    <span><i class="sw" style="background:var(--good)"></i>GLU fused-down 1092µs（-87µs/segment）</span>
+    <span><i class="sw" style="background:var(--cpu-g)"></i>hook 340-393µs/segment（CPU 側，submit-after 序列化）</span>
+    <span><i class="sw" style="background:var(--cpu-o)"></i>submit 72-84µs/segment</span>
+  </div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">每 segment 平均（submit-after + semaphore）<small>41 segment/step</small></div>
+      <div class="bar">
+        <div class="seg" style="width:72%;background:var(--wr)">GPU 1179</div>
+        <div class="seg" style="width:21%;background:var(--cpu-g)">hook 393</div>
+        <div class="seg tiny" style="width:5%;background:var(--cpu-o)">79</div>
+      </div>
+    </div>
+  </div>
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">CGC_GLU_FUSED_DOWN=1<small>GPU -87µs/segment（fused GLU+down 少一次 dispatch）</small></div>
+      <div class="bar">
+        <div class="seg" style="width:70%;background:var(--good)">GPU 1092</div>
+        <div class="seg" style="width:22%;background:var(--cpu-g)">hook 396</div>
+        <div class="seg tiny" style="width:5%;background:var(--cpu-o)">84</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note"><b>GPU 牆實證</b>：CGC_GLU_FUSED_DOWN 把 GPU wait 從 1179 → 1092µs（-3.5ms/step），但整體 t/s 幾乎不變（15.47 vs 15.34）——因為 GPU 節省被 hook 序列化吃掉（submit-after 下 GPU 在 hook 期間 idle）。<b>要提速，GPU 牆與 hook 序列化必須同時解決。</b></p>
+</div>
+
+<!-- ============ 3. Expert-cache 效果 ============ -->
+<div class="card">
+  <h2>③ Expert-cache hit rate 對照</h2>
+  <p class="desc">Expert-cache 是 qwen36 -ngl 99 的必要條件（base 13.2GB > 11.45GB → 硬 OOM）。Hit rate 已達 95-98%，miss 只剩「首次見到的 drift 專家」（不可預測）。</p>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">長 coding prompt<small>97.8% hit · 16.53 t/s</small></div>
+      <div class="bar">
+        <div class="seg" style="width:97.8%;background:var(--good)" title="hit 266587/272720 = 97.8%">97.8%</div>
+        <div class="seg tiny" style="width:2.2%;background:var(--warn)" title="miss 6133 = 2.2%（drift，首次見到）">2.2%</div>
+      </div>
+    </div>
+  </div>
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">short fibonacci<small>94.9% hit · 15.47 t/s</small></div>
+      <div class="bar">
+        <div class="seg" style="width:94.9%;background:var(--good)" title="hit 40770/42960 = 94.9%">94.9%</div>
+        <div class="seg tiny" style="width:5.1%;background:var(--warn)" title="miss 2190 = 5.1%">5.1%</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note"><b>pool 上限</b>：4.77GiB 是安全頂（CGC_EXPERT_CACHE_BYTES=4767744000）；5.1GiB 即 OOM（kIOGPUCommandBufferCallbackErrorOutOfMemory）。每層 union 持續成長（step 120 仍 +22 個新專家）→ 長 prompt 不可能全 resident，miss = 結構性 drift（~17-28/step），hook 的冷讀 pread 是 14ms 序列化的主成分。</p>
+</div>
+
+<!-- ============ 4. 30 t/s 天花板 ============ -->
+<div class="card">
+  <h2>④ 30 t/s 天花板分析（無 MTP）</h2>
+  <p class="desc">目標 30 t/s = 33.3ms/step。逐層拆解目前與可達的天花板。</p>
+
+  <div class="ceil">
+    <div class="cl">實測（submit-after 正確路徑）<br><small>64.6 ms/step</small></div>
+    <div class="ctrack"><div class="cfill" style="width:64.6%;background:linear-gradient(90deg,#2c4a6a,#5c90c0)">64.6ms</div></div>
+    <div class="tokbadge">≈ <b class="hl">15.5</b> tok/s <span class="tag r">目標 30</span></div>
+  </div>
+  <div class="ceil">
+    <div class="cl">最佳化後（hook 隱藏 + GLU fused，仍正確）<br><small>GPU 45 + submit 3 = 48ms</small></div>
+    <div class="ctrack"><div class="cfill" style="width:48%;background:linear-gradient(90deg,#2c6a4a,#5cc09a)">48ms</div></div>
+    <div class="tokbadge">≈ <b>20.8</b> tok/s</div>
+  </div>
+  <div class="ceil">
+    <div class="cl">純 GPU 牆（zero hook）<br><small>45 ms/step（不可再低，除非砍 kernel 數）</small></div>
+    <div class="ctrack"><div class="cfill" style="width:45%;background:linear-gradient(90deg,#1c4a3a,#3a8a6a)">45ms</div></div>
+    <div class="tokbadge">≈ <b>22.2</b> tok/s</div>
+  </div>
+  <div class="ceil">
+    <div class="cl">08-19 引擎層（fused MoE FFN，需重建 kernel）<br><small>~38 ms/step（08-19 §8.72 估值）</small></div>
+    <div class="ctrack"><div class="cfill" style="width:38%;background:linear-gradient(90deg,#8a6a2c,#c0a05c)">38ms</div></div>
+    <div class="tokbadge">≈ <b>26.3</b> tok/s</div>
+  </div>
+  <div class="ceil">
+    <div class="cl">純 kernel 地板（dispatch 免費，不可達）<br><small>~35 ms/step（08-19 §8.71）</small></div>
+    <div class="ctrack"><div class="cfill" style="width:35%;background:linear-gradient(90deg,#6a2c4a,#c05c90)">35ms</div></div>
+    <div class="tokbadge">≈ <b>28.6</b> tok/s</div>
+  </div>
+  <div class="ceil">
+    <div class="cl">30 t/s 目標線<br><small>33.3 ms/step（虛線）</small></div>
+    <div class="ctrack" style="position:relative"><div style="position:absolute;left:33.3%;top:-6px;bottom:-6px;border-left:2px dashed var(--accent)"></div></div>
+    <div class="tokbadge"><b class="hl">30 tok/s</b> <span class="tag r">低於 kernel 地板</span></div>
+  </div>
+
+  <p class="note"><b>結論</b>：30 t/s（33.3ms）<b>低於 IQ3_XXS 的純 kernel 地板（35ms/28.6 t/s）</b>。也就是說——<b>用目前的 Qwen3.6-35B-A3B-UD-IQ3_XXS 模型 + 現有 kernel，任何軟體層優化（hook 隱藏、kernel fusion）最多到 ~28.6 t/s，到不了 30 t/s</b>。GPU 45ms 牆本身（weight-read bandwidth-bound + dispatch bubble）已佔 22.2 t/s 上限。</p>
+</div>
+
+<!-- ============ 5. Proposal：30 t/s 無 MTP ============ -->
+<div class="card">
+  <h2>⑤ Proposal：是否有辦法達到 30 t/s（除 MTP）</h2>
+  <p class="desc">分三層評估：軟體優化 / kernel 重寫 / 模型側。30 t/s 需要 step 從 64.6ms 壓到 33.3ms（-31ms）。</p>
+
+  <div class="proposal">
+    <b>Path A：消除 hook 序列化（fix submit-ahead race）→ ~20.8 t/s</b>
+    <br>把 14ms 的 hook 序列化藏進 GPU 執行（ahead 重疊）。但 submit-ahead 的 remap race 是硬問題：GPU 可能在 hook 寫完 remap 前就讀取 → 錯誤輸出。event-gate（GPU 等 hook blit）會把 idle 加回去 → 無淨收益。需 GPU-side data dependency（slot table 查表，08-19 的「GPU remap」方向），複雜度高、收益 ~21 t/s（未到 30）。
+  </div>
+  <div class="proposal">
+    <b>Path B：kernel fusion（重建 08-19 的 fused MoE FFN + 更多 fusion）→ ~25-26 t/s</b>
+    <br>08-19 的 CGC_FUSED_MOE_FFN（fused gate+up+GLU+down 單 dispatch）在目前 build 不存在。重建它可把 GPU 牆 45 → ~38ms（fused 少 dispatch bubble）。配 Path A → ~26.3 t/s。中等工程（kernel fusion，數天-數週）。仍 < 30。
+  </div>
+  <div class="proposal">
+    <b>Path C：kernel 重寫（IQ3 inline dequant + sequential access）→ 28.6 t/s（地板）</b>
+    <br>08-19 估 3-6 週大工程。達到純 kernel 地板 35ms = 28.6 t/s。<b>仍是天花板，不是 30。</b>
+  </div>
+  <div class="proposal" style="border-color:var(--good)">
+    <b>Path D（唯一能超過 30 的無 MTP 路徑）：縮小模型側 / 降低 active bytes → 33-36 t/s</b>
+    <br>GPU 牆 = weight-read（bandwidth-bound）。把 IQ3_XXS 換成更小的量化（IQ2_XS / IQ2_XXS，weight 再砍 ~25-35%）→ weight-read 24.9 → ~18ms → GPU 牆 ~28-30ms → <b>33-36 t/s</b>。
+    <br>代價：<b>IQ2 在 35B 的輸出品質風險</b>（35B@IQ2 ≈ 20B@IQ4 的品質位階），且需重新做模型轉換 + 重驗 bit-identity。這是「換模型」而非「換引擎」，與 MTP 一樣是模型側手段。
+  </div>
+  <div class="proposal" style="border-color:var(--warn)">
+    <b>Verdict：30 t/s 在目前模型 + 現有 kernel + 本硬體上，無 MTP 不可達。</b>
+    <br>理由：30 t/s = 33.3ms，低於 IQ3_XXS 純 kernel 地板（35ms/28.6 t/s）。軟體優化（A/B/C）最多到 28.6 t/s。<b>唯一 30+ 的無 MTP 路徑是 Path D（更小量化 IQ2）</b>，屬模型側變更，非純引擎優化。
+  </div>
+
+  <p class="note"><b>務實建議</b>：若 30 t/s 是硬需求，優先序 = <b>(1) MTP（排除在外）→ (2) Path D IQ2 模型（最快達 30+，但品質風險）→ (3) Path B kernel fusion（穩健到 ~26 t/s）</b>。若品質優先，接受 15.5-17 t/s（正確路徑）或投資 Path B 到 ~26 t/s。</p>
+</div>
+
+<!-- ============ 6. Production 設定 ============ -->
+<div class="card">
+  <h2>⑥ 08-22 Production 設定定案</h2>
+  <table>
+    <tr><th>參數</th><th>值</th><th>出處</th></tr>
+    <tr><td>模型</td><td>Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf</td><td>Unsloth UD-IQ3_XXS（12GB）</td></tr>
+    <tr><td>-ngl</td><td><b>99</b>（full GPU offload）</td><td>§8.38：只有 +cache 能 full offload</td></tr>
+    <tr><td>CGC_EXPERT_CACHE_BYTES</td><td><b>4767744000（4.77GiB）</b></td><td>安全頂；5.1GiB OOM</td></tr>
+    <tr><td>CGC_SUBMIT_AFTER</td><td><b>1</b>（強制）</td><td>submit-ahead racy → 錯誤輸出，禁用</td></tr>
+    <tr><td>semaphore wake</td><td><b>內建</b>（ggml_metal_wait_cgc_done）</td><td>08-22：8.35 → 15.6 t/s</td></tr>
+    <tr><td>LLAMA_EXPERT_CACHE_ALLOW_NGL</td><td><b>1</b></td><td>-ngl>0 + cache 硬 guard</td></tr>
+    <tr><td>LLAMA_EXPERT_CACHE_WORKERS</td><td><b>8</b></td><td>§8.12 甜蜜點（16 反效果）</td></tr>
+    <tr><td>LLAMA_EXPERT_CACHE_L4_SKIP_LAYER0</td><td><b>1</b></td><td>§8.35/8.36 blk.0 排除 pool</td></tr>
+    <tr><td>CGC_N_CB</td><td><b>8</b></td><td>§8.93；cb16 反效果（14.78）</td></tr>
+    <tr><td>CGC_OA_ASYNC</td><td><b>1</b></td><td>§8.77：Metal splits async</td></tr>
+    <tr><td>CGC_GLU_FUSED_DOWN</td><td>opt-in（GPU -3.5ms，總速持平）</td><td>08-22 量測：wait 1179→1092µs</td></tr>
+    <tr><td>CGC_WAKE_POLL_US</td><td><b>15</b></td><td>semaphore 後僅 fallback</td></tr>
+    <tr><td>-t</td><td>8</td><td>threads</td></tr>
+  </table>
+
+  <p class="note"><b>Binary</b>：<code>build/bin/llama-simple</code>（temp/llama_roadB/llama.cpp-master，branch expert-cache-fork）。生產 launcher：<code>scripts/run_n30cache.sh</code>（已強制 CGC_SUBMIT_AFTER=1）。</p>
+</div>
+
+<p class="sub" style="margin-top:24px">數據：08-22 實測（submit-after + semaphore wake；France 15.6 t/s / fib 15.47-17.07 t/s / 610-tok code-review 16.53 t/s、prefill 15.6 t/s；hit 94.9-97.8%）。GPU wait/hook/submit 來自 CGC-SEG（1179/393/79µs；GLU fused 1092/396/84µs）。kernel 地板 35ms/28.6 t/s 沿用 08-19 §8.71。30 t/s = 33.3ms 低於該地板 → 無 MTP 不可達，唯一路徑為 Path D（IQ2 縮小 active bytes）。</p>
+
+</div>
+</body>
+</html>
