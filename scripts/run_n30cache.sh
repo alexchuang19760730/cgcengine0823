@@ -154,13 +154,17 @@ OUT=/tmp/n30cache.out; ERR=/tmp/n30cache.err
     $SEED_ARG $CTX_ARG $MTP_ARG -p "$PROMPT" > "$OUT" 2> "$ERR"
 RC=$?
 
-echo "--- 結果 ---"
-sed 's/\r/\n/g' "$ERR" | grep -oE "decoded *[0-9]+ tokens in *[0-9.]+ seconds?, *speed: *[0-9.]+ t/s" | tail -1 || true
-grep -oE "hit rate [0-9.]+%" "$ERR" | tail -1 || true
-grep -oE "cache (hits|misses)=[0-9]+" "$ERR" | tail -2 || true
+echo "--- 結果（啟動 / prefill / decode 分開）---"
+# §計時拆解：llama_perf_context_print 把 load time（一次性啟動）、prompt eval time（prefill）、
+# eval time（decode 穩態）、total time 分開報。err 含 binary byte → grep 一律加 -a 強制文字模式。
+sed 's/\r/\n/g' "$ERR" | grep -aoE "llama_perf_context_print: *(load time|prompt eval time|eval time|total time) *=.*" | sed -E 's/llama_perf_context_print: *//' | tail -4 || true
+# §main: decoded 那行 = prefill+decode 混算的平均，僅供快速參考（準確拆解看上面 eval time）。
+grep -aoE "decoded *[0-9]+ tokens in *[0-9.]+ s, *speed: *[0-9.]+ t/s" "$ERR" | tail -1 || true
+grep -aoE "hit rate [0-9.]+%" "$ERR" | tail -1 || true
+grep -aoE "cache (hits|misses)=[0-9]+" "$ERR" | tail -2 || true
 # §MTP: accept rate + n_drafted + n_accept（speculative-simple 才有）
-grep -oE "accept *= *[0-9.]+%" "$ERR" | tail -1 || true
-grep -oE "n_(drafted|accept) *= *[0-9]+" "$ERR" | tail -2 || true
+grep -aoE "accept *= *[0-9.]+%" "$ERR" | tail -1 || true
+grep -aoE "n_(drafted|accept) *= *[0-9]+" "$ERR" | tail -2 || true
 grep "maximum resident set size" "$ERR" | awk '{printf "RSS: %.2f GB\n", $1/1073741824}' || true
 echo "--- 輸出前 80 字元 ---"
 head -c 80 "$OUT" | tr '\n' ' '; echo
