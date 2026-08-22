@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CGC 引擎 08-23 建置與測量報告 · qwen36 decode 16.0-16.2 t/s（git 正確路徑）</title>
+<style>
+  :root {
+    --bg: #0f1420; --card: #171e2e; --ink: #e8ecf4; --sub: #9aa5b8;
+    --line: #2a3350;
+    /* qwen36 GPU */
+    --wr: #f0a45c; --small: #e86a6a; --ssm: #d98cf0; --sdpa: #7fb8f0; --bubble: #6b7aa8;
+    /* qwen36 CPU */
+    --cpu-r: #f0c25c; --cpu-g: #b8d95c; --cpu-s: #7fd4c0; --cpu-o: #8a97ad;
+    /* accent */
+    --accent: #ffd479; --good: #8fe3a0; --warn: #f08a8a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; padding: 32px 20px 60px; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: var(--sub); font-size: 14px; margin-bottom: 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 22px 24px; margin-bottom: 22px; }
+  .card h2 { font-size: 18px; margin: 0 0 4px; }
+  .card .desc { color: var(--sub); font-size: 13px; margin: 0 0 16px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 10px 0 18px; font-size: 12.5px; color: var(--sub); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .barwrap { margin-bottom: 10px; }
+  .barrow { display: flex; align-items: center; gap: 10px; }
+  .barlabel { width: 280px; font-size: 12.5px; color: var(--ink); flex-shrink: 0; line-height: 1.35; }
+  .barlabel small { display: block; color: var(--sub); font-size: 11px; }
+  .bar { flex: 1; height: 34px; border-radius: 8px; overflow: hidden; display: flex; background: #0c1019; border: 1px solid var(--line); }
+  .seg { height: 100%; display: flex; align-items: center; justify-content: center; font-size: 10.5px; color: #10141f; font-weight: 700; white-space: nowrap; overflow: hidden; min-width: 0; border-right: 1px solid rgba(15,20,32,.35); }
+  .seg.tiny { font-size: 0; }
+  .seg.tiny:hover { font-size: 10.5px; }
+  .total { font-size: 12px; color: var(--sub); text-align: right; margin: 4px 0 0 290px; }
+  .note { font-size: 12.5px; color: var(--sub); margin-top: 12px; line-height: 1.6; }
+  .note b { color: var(--ink); }
+  .code { font-family: "SF Mono", Menlo, monospace; font-size: 11.5px; background: #0c1019; border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; color: var(--cpu-g); }
+  pre.cmd { font-family: "SF Mono", Menlo, monospace; font-size: 12px; background: #0c1019; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; color: #cfe0a0; line-height: 1.6; }
+  pre.cmd .cmt { color: var(--sub); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--sub); font-weight: 600; font-size: 12px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.k { white-space: nowrap; font-family: "SF Mono", Menlo, monospace; font-size: 11.5px; color: var(--cpu-g); }
+  .hl { color: var(--accent); font-weight: 700; }
+  .ceil { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .ceil .cl { width: 280px; font-size: 12.5px; flex-shrink: 0; }
+  .ceil .ctrack { flex: 1; height: 26px; background: #0c1019; border: 1px solid var(--line); border-radius: 7px; position: relative; }
+  .ceil .cfill { height: 100%; border-radius: 6px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 11px; font-weight: 700; color: #10141f; }
+  .tokbadge { margin-left: 10px; font-size: 12.5px; color: var(--ink); width: 170px; flex-shrink: 0; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 11px; margin-left: 6px; }
+  .tag.g { background: #1c3a24; color: #8fe3a0; }
+  .tag.r { background: #3a1c1c; color: #f08a8a; }
+  .tag.y { background: #3a321c; color: #e3cf8f; }
+  .proposal { border-left: 3px solid var(--accent); padding: 10px 14px; background: #141a29; border-radius: 0 8px 8px 0; margin: 14px 0; }
+  .proposal b { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>CGC · 引擎建置與測量報告（長條圖）</h1>
+<div class="sub">llama.cpp fork · M4 Max 16GB · 2026-08-23 · qwen36 IQ3_XXS -ngl 99 + cache 4GiB · git 正確路徑（submit-after + semaphore wake）</div>
+
+<!-- ============ ① 建置方式 ============ -->
+<div class="card">
+  <h2>① 這個版本怎麼建（build）</h2>
+  <p class="desc">回到 git 上的<b>正確路徑版本</b>（fastest &amp; correct）：committed source + 重建 binary。<b>不是</b> prebuilt dylib、也不是未提交的實驗（LAYER_CAPS / whole-graph 已 stash 保留、不進此版本）。</p>
+
+  <pre class="cmd"><span class="cmt"># 1) 切到生產分支（expert-cache-fork，HEAD = f9c9ee3）</span>
+git checkout expert-cache-fork
+
+<span class="cmt"># 2) 重建 dylibs + llama-simple（critical：BLAS/ACCELERATE/REPACK 全 OFF 保 IQ3 正確性）</span>
+<span class="cmt">#    scripts/build_fork_llama.sh 設定：GGML_BLAS=OFF GGML_ACCELERATE=OFF GGML_CPU_REPACK=OFF</span>
+cmake --build build --target llama-simple -j "$(sysctl -n hw.ncpu)"
+
+<span class="cmt"># 3) 產物</span>
+build/bin/llama-simple          <span class="cmt"># 推論 binary</span>
+build/bin/libllama.0.0.16.dylib <span class="cmt"># 引擎（含 expert-cache hook）</span>
+
+<span class="cmt"># 4) 生產 launcher（打包全部 A/B 定案參數）</span>
+./scripts/run_n30cache.sh -m qwen36 -n 384 -p "The capital of France is"</pre>
+
+  <p class="note"><b>驗證</b>：重建後 <span class="code">strings libllama | grep -c "CGC_WHOLE_GRAPH|cgc_layer_cap"</span> = 0（無實驗碼）；輸出與先前 git 版 <b>bit-identical ✓</b>。</p>
+</div>
+
+<!-- ============ ② CGC 引擎機制 ============ -->
+<div class="card">
+  <h2>② CGC 引擎機制是什麼（為什麼需要它）</h2>
+  <p class="desc">Qwen3.6-35B-A3B 是 MoE：每層 256 個 expert × 40 層，全部 resident 遠超 M4 Max 的 <b>11.45GB Metal working set</b>（base 13.2GB → 硬 OOM）。CGC 引擎用 <b>bounded-residency expert cache</b> 讓 decode 只在 GPU 保留「當下工作集的熱 experts」。</p>
+
+  <div class="proposal">
+    <b>核心機制（4 件事）</b>
+    <br>① <b>L4 Metal zero-copy pool</b>：把 model 的 expert tensor 記憶體直接當 pool（<span class="code">adopt_pool_region</span>），0-copy、不額外吃 GPU；slot 上限由 <span class="code">CGC_EXPERT_CACHE_BYTES</span> 決定（~210 slot/layer）。
+    <br>② <b>eval callback（pre-hook）</b>：top-k 算完立刻觸發 → <span class="code">ensure_slot</span> + 填真權重 + 更新 remap table，讓下一步的高頻 expert 已在 GPU → ~95% hit。
+    <br>③ <b>segmented async dispatch（CGC_OA_ASYNC）</b>：Metal splits 非同步提交，免逐層 callback sync。
+    <br>④ <b>submit-after + semaphore wake（CGC_SUBMIT_AFTER=1）</b>：下一個 segment 等上一個 callback 完成才提交 → 避免 remap race（錯誤輸出）；semaphore 喚醒取代 sched_yield poll（8.35 → 15.6 t/s）。
+  </div>
+
+  <p class="note"><b>miss = 結構性 drift</b>：剩餘 ~4-5% miss 是「首次見到的專家」（長 prompt 下 pool 不可能全 resident），hook 的冷讀 pread 是 decode 序列化的主成分。hit rate 94.3%（短測）→ 95.9%（長測）。</p>
+</div>
+
+<!-- ============ ③ 參數與機制 ============ -->
+<div class="card">
+  <h2>③ 用了啥參數 + 每個參數的機制</h2>
+  <p class="desc">全部來自 <span class="code">scripts/run_n30cache.sh</span>（每項有 §8 出處），08-23 這版與 08-22 生產設定一致（budget 4GiB 為本機安全頂）。</p>
+
+  <table>
+    <tr><th>參數</th><th>值</th><th>機制（做什麼 / 為什麼）</th></tr>
+    <tr><td class="k">-ngl</td><td><b>99</b></td><td>full GPU offload。base 13.2GB &gt; 11.45GB → 只有 + cache 換出非熱 experts 才能 full offload（§8.38）。</td></tr>
+    <tr><td class="k">CGC_EXPERT_CACHE_BYTES</td><td><b>4294967296（4GiB）</b></td><td>L4 pool 容量上限 → 決定每層 slot 數。4GiB = 本機安全頂（5.1GiB 即 Metal OOM）。限制 resident 數避免無界成長爆 VRAM。</td></tr>
+    <tr><td class="k">CGC_SUBMIT_AFTER</td><td><b>1</b>（強制）</td><td>正確性。submit-ahead 是 racy（GPU 可能讀到舊 remap → 錯誤輸出）。submit-after = 上個 callback 完成才 submit 下段。</td></tr>
+    <tr><td class="k">semaphore wake</td><td><b>內建</b></td><td>Metal completion handler semaphore 喚醒（<span class="code">ggml_metal_wait_cgc_done</span>），取代 sched_yield poll：8.35 → 15.6 t/s。</td></tr>
+    <tr><td class="k">LLAMA_EXPERT_CACHE_ALLOW_NGL</td><td><b>1</b></td><td>-ngl&gt;0 時啟用 cache 的硬 guard（n99 必要）。</td></tr>
+    <tr><td class="k">LLAMA_EXPERT_CACHE_WORKERS</td><td><b>8</b></td><td>背景 prefetch 執行緒數（pool8 甜蜜點；16 反效果，§8.12）。</td></tr>
+    <tr><td class="k">LLAMA_EXPERT_CACHE_L4_SKIP_LAYER0</td><td><b>1</b></td><td>blk.0 排除 pool（修復，§8.35/8.36）。</td></tr>
+    <tr><td class="k">CGC_N_CB</td><td><b>8</b></td><td>MTL encode 平行化（cb8 飽和點；cb16 反效果 11.78 t/s，§8.93）。</td></tr>
+    <tr><td class="k">CGC_OA_ASYNC</td><td><b>1</b></td><td>Metal splits 走 async dispatch，免每層 callback sync（qwen36 +12.6%，§8.77）。</td></tr>
+    <tr><td class="k">CGC_WAKE_POLL_US</td><td><b>15</b></td><td>semaphore 之後的 fallback spin 延遲（§8.51；semaphore 為主、poll 只是備援）。</td></tr>
+    <tr><td class="k">LLAMA_EXPERT_CACHE_PIN_PROFILE</td><td><b>off</b>（預設）</td><td>calibration 高頻 profile 預 pin。非 coding prompt 反而降速（profile 與 workload 不匹配）→ 預設 off，opt-in。</td></tr>
+    <tr><td class="k">--no-mmap</td><td><b>on</b></td><td>凍機防護（mmap 9GB 冷頁風暴根因）。</td></tr>
+    <tr><td class="k">-t</td><td>8</td><td>CPU threads。</td></tr>
+  </table>
+
+  <p class="note"><b>Binary / Launcher</b>：<span class="code">build/bin/llama-simple</span>（temp/llama_roadB/llama.cpp-master，branch expert-cache-fork @ f9c9ee3）+ <span class="code">scripts/run_n30cache.sh</span>。</p>
+</div>
+
+<!-- ============ ④ 實測結果 ============ -->
+<div class="card">
+  <h2>④ 跑了啥結果（啟動 / prefill / decode 分開）</h2>
+  <p class="desc">qwen36 France · 4GiB · cb8 · workers8 · submit-after · PIN off · n=384。計時來自 <span class="code">llama_perf_context_print</span>（run_n30cache.sh 已改成分開報）。</p>
+
+  <div class="legend">
+    <span><i class="sw" style="background:var(--cpu-r)"></i>啟動/載入（一次性，不屬吞吐）</span>
+    <span><i class="sw" style="background:var(--ssm)"></i>prefill（prompt eval）</span>
+    <span><i class="sw" style="background:var(--wr)"></i>decode（eval 穩態）</span>
+  </div>
+
+  <table>
+    <tr><th>階段</th><th>時間</th><th>速度</th><th>說明</th></tr>
+    <tr><td>load（啟動，一次性）</td><td class="num">6.68s（暖）/ 11.14s（冷）</td><td class="num">—</td><td>OS 頁面快取冷熱差異；<b>啟動只付一次</b>，之後服務不受影響</td></tr>
+    <tr><td>prompt eval（prefill）</td><td class="num">1.02s / 6 tok</td><td class="num">5.9-6.3 t/s</td><td>這題 prompt 太短（6 tok），不具參考性（08-22 長 coding prefill 15.6 t/s）</td></tr>
+    <tr><td><b>eval（decode 穩態）</b></td><td class="num"><b>62.3 ms/token</b></td><td class="num"><b>16.04-16.19 t/s</b></td><td><b>真正的服務吞吐</b>；與 08-22 報告 64.6ms/15.5 t/s 一致</td></tr>
+    <tr><td>total（一段 n=384）</td><td class="num">32.7s / 350 tok</td><td class="num">—</td><td>含一次性 load（冷 11.1s）</td></tr>
+    <tr><td>hit rate</td><td class="num">94.3%（n=128）→ 95.9%（n=384）</td><td class="num">—</td><td>長 decode 穩定後更高</td></tr>
+  </table>
+
+  <p class="note"><b>n=128 vs n=384 的誤區</b>：decode 前 ~64 步是冷啟動（76-90ms/step，pool 熱身 + 頁面暖），短測平均被拖到 11.5-14.1 t/s；<b>長測（n=384）平均 15.3-16.0 t/s</b>，穩態 57-62ms/step。量「真實速度」要看穩態（長 decode 或先暖機）。</p>
+</div>
+
+<!-- ============ ⑤ 長條圖 ============ -->
+<div class="card">
+  <h2>⑤ 長條圖</h2>
+  <p class="desc">三張：① 每步 decode compute 熱身曲線（CGC-PHASE）；② 一段 n=384 run 的 phase 組成；③ hit rate。</p>
+
+  <h2 style="font-size:15px">⑤-1 每 32 步的 decode compute（ms）—— 冷啟動 → 穩態</h2>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--wr)"></i>compute ms/step（CGC-PHASE，含 GPU+hook+submit）</span>
+    <span><i class="sw" style="background:var(--good)"></i>穩態 ~57ms/step ≈ 17.5 t/s</span>
+  </div>
+  <div class="barwrap">
+    <div class="barrow"><div class="barlabel">step 32<small>冷啟動：pool 熱身 + 頁面暖</small></div><div class="bar"><div class="seg" style="width:100%;background:var(--wr)">90.3</div></div></div>
+    <div class="barrow"><div class="barlabel">step 64</div><div class="bar"><div class="seg" style="width:84%;background:var(--wr)">76.2</div></div></div>
+    <div class="barrow"><div class="barlabel">step 96</div><div class="bar"><div class="seg" style="width:77%;background:var(--wr)">69.6</div></div></div>
+    <div class="barrow"><div class="barlabel">step 128</div><div class="bar"><div class="seg" style="width:74%;background:var(--wr)">66.5</div></div></div>
+    <div class="barrow"><div class="barlabel">step 160</div><div class="bar"><div class="seg" style="width:69%;background:var(--wr)">62.4</div></div></div>
+    <div class="barrow"><div class="barlabel">step 192</div><div class="bar"><div class="seg" style="width:68%;background:var(--wr)">61.3</div></div></div>
+    <div class="barrow"><div class="barlabel">step 224</div><div class="bar"><div class="seg" style="width:66%;background:var(--wr)">59.8</div></div></div>
+    <div class="barrow"><div class="barlabel">step 256</div><div class="bar"><div class="seg" style="width:65%;background:var(--wr)">58.7</div></div></div>
+    <div class="barrow"><div class="barlabel">step 288</div><div class="bar"><div class="seg" style="width:64%;background:var(--wr)">57.8</div></div></div>
+    <div class="barrow"><div class="barlabel">step 320（穩態）<small>≈ 17.5 t/s</small></div><div class="bar"><div class="seg" style="width:63%;background:var(--good)">57.2</div></div></div>
+  </div>
+
+  <h2 style="font-size:15px">⑤-2 一段 n=384 run 的 phase 組成（32.7s total）</h2>
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">n=384 · France · 冷頁面<small>load 11.1s（一次性） + prefill 1.0s + decode 21.4s</small></div>
+      <div class="bar">
+        <div class="seg tiny" style="width:34%;background:var(--cpu-r)" title="load 11.14s（一次性啟動，不屬吞吐）">11.1 load</div>
+        <div class="seg tiny" style="width:3%;background:var(--ssm)" title="prefill 1.02s / 6 tok">1.0 prefill</div>
+        <div class="seg" style="width:63%;background:var(--wr)" title="decode 21.44s / 344 tok = 62.3ms/tok → 16.04 t/s">21.4 decode</div>
+      </div>
+    </div>
+  </div>
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">對比：暖頁面（第二次跑，load 掉到 6.7s）<small>load 省 ~4.4s，decode 不變</small></div>
+      <div class="bar">
+        <div class="seg tiny" style="width:23%;background:var(--cpu-r)" title="load 6.68s（暖頁面）">6.7 load</div>
+        <div class="seg tiny" style="width:3%;background:var(--ssm)" title="prefill 1.04s">1.0 prefill</div>
+        <div class="seg" style="width:73%;background:var(--wr)" title="decode 21.25s / 344 tok = 61.8ms/tok → 16.19 t/s">21.3 decode</div>
+      </div>
+    </div>
+  </div>
+
+  <h2 style="font-size:15px">⑤-3 hit rate（專家命中率）</h2>
+  <div class="barwrap">
+    <div class="barrow"><div class="barlabel">n=384（長測）<small>95.9% hit</small></div><div class="bar"><div class="seg" style="width:95.9%;background:var(--good)" title="114072/118960 = 95.9%">95.9%</div><div class="seg tiny" style="width:4.1%;background:var(--warn)" title="miss 4888 = 4.1%（drift）">4.1%</div></div></div>
+    <div class="barrow"><div class="barlabel">n=128（短測）<small>94.3% hit</small></div><div class="bar"><div class="seg" style="width:94.3%;background:var(--good)" title="46372/49200 = 94.3%">94.3%</div><div class="seg tiny" style="width:5.7%;background:var(--warn)" title="miss 2828 = 5.7%">5.7%</div></div></div>
+  </div>
+
+  <p class="note"><b>圖怎麼讀</b>：① 冷啟動在 step 32 高達 90.3ms，到 step ~160 起穩定在 57-62ms（<b>平均 16 t/s 的來源是穩態</b>）；② load 是一次性（冷 11s / 暖 6.7s），<b>decode 21.4s/344tok 才是服務吞吐 = 16 t/s</b>；③ hit 95.9%，miss 是結構性 drift（首次見到的專家）。</p>
+</div>
+
+<!-- ============ ⑥ 版本位置 ============ -->
+<div class="card">
+  <h2>⑥ 版本存放位置（git + GitHub）</h2>
+  <table>
+    <tr><th>位置</th><th>內容</th></tr>
+    <tr><td>本地 branch</td><td><b>expert-cache-fork</b> @ <span class="code">f9c9ee3</span>（HEAD；含本報告 commit）</td></tr>
+    <tr><td>本地 remote</td><td><span class="code">github0823</span> → git@github.com:alexchuang19760730/cgcengine0823.git（SSH；HTTPS 因 credential 帶到錯誤帳號不可用）</td></tr>
+    <tr><td>遠端 GitHub</td><td><a style="color:var(--sdpa)" href="https://github.com/alexchuang19760730/cgcengine0823">github.com/alexchuang19760730/cgcengine0823</a> · branch <b>expert-cache-fork</b>（已 push，請設為預設分支）</td></tr>
+    <tr><td>本報告</td><td><span class="code">moeexpert/CGC_TPOT_延遲分解_2026-08-23.html</span>（仿 08-22 格式）</td></tr>
+    <tr><td>未提交實驗</td><td>LAYER_CAPS / whole-graph 在 stash（<span class="code">session-layercaps-wholegraph-experiments</span>），不屬此版本</td></tr>
+  </table>
+
+  <p class="note"><b>commit 歷史（此版本）</b>：<span class="code">f9c9ee3</span> run_n30cache.sh 計時拆解 load/prefill/decode + grep -a 修正 → <span class="code">780185a</span> docs 08-22 TPOT 分解 → <span class="code">a06090a</span> semaphore wake + PIN_PROFILE + submit-after（生產核心）。</p>
+</div>
+
+<p class="sub" style="margin-top:24px">數據：08-23 實測（git committed source + 重建 build/bin/llama-simple；France n=384：load 11.14s/6.68s、prefill 1.02s/6tok、eval 61.8-62.3ms/tok → 16.0-16.2 t/s、hit 95.9%、bit-identical ✓；CGC-PHASE 熱身 90.3→57.2ms）。per-segment GPU/hook 分解沿用 08-22 CGC-SEG（45/14.5/5ms 結構不變）。</p>
+
+</div>
+</body>
+</html>
