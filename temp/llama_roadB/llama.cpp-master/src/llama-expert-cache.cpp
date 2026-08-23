@@ -188,6 +188,17 @@ static int32_t pick_slot(llama_expert_cache * cache, uint32_t layer) {
     const int32_t evicted = owner[best_slot];
     if (evicted >= 0 && evicted < (int32_t) cache->n_expert) {
         cache->slot_table[(size_t) layer * cache->n_expert + evicted] = -1;
+        // [CGC prefetch v2] remember the evicted expert: it is a recurring-hot candidate that
+        // the B-section prefetch will re-resident (so the next ensure hits instead of preading).
+        auto & ring = cache->evicted_recent[layer];
+        const uint32_t cap = cache->evicted_ring_size.empty() ? 0 :
+                (layer < cache->evicted_ring_size.size() ? cache->evicted_ring_size[layer] : 0);
+        if (cap > 0) {
+            ring.push_back((uint32_t) evicted);
+            if (ring.size() > cap) {
+                ring.erase(ring.begin(), ring.begin() + (ring.size() - cap));
+            }
+        }
     }
     owner[best_slot] = -1;
     return best_slot;
@@ -219,6 +230,12 @@ static void fill_pool_direct_collect(llama_expert_cache * cache, uint32_t layer,
                                      uint32_t expert, std::vector<llama_expert_cache::segment> & segs,
                                      std::vector<uint8_t *> & dsts) {
     const uint64_t key = make_key(layer, expert);
+    auto kpos = cache->key_segs.find(key);
+    if (getenv("CGC_FILLDBG") != nullptr && layer == 1 && expert > 200) {
+        fprintf(stderr, "FILLDBG l=%u e=%u slot=%d key=%s npos=%d\n",
+                layer, expert, slot_idx, kpos == cache->key_segs.end() ? "MISSING" : "ok",
+                kpos == cache->key_segs.end() ? 0 : (int) kpos->second.size());
+    }
     const auto & positions = cache->key_segs.at(key);
     for (uint32_t pos : positions) {
         const auto & e = cache->index[pos];
@@ -228,6 +245,11 @@ static void fill_pool_direct_collect(llama_expert_cache * cache, uint32_t layer,
         size_t stride = 0;
         uint32_t slots = 0;
         const uint8_t * region = pool_region(cache, layer, e.kind, &stride, &slots);
+        if (getenv("CGC_FILLDBG") != nullptr && layer == 1 && expert > 200) {
+            fprintf(stderr, "FILLDBG   kind=%d off=%llu bytes=%u region=%p slots=%u slotidx=%d skip=%d\n",
+                    e.kind, (unsigned long long) e.file_offset, e.bytes, (const void *) region, slots,
+                    slot_idx, (region == nullptr || slots == 0 || slot_idx < 0 || (uint32_t) slot_idx >= slots) ? 1 : 0);
+        }
         if (region == nullptr || slots == 0 || slot_idx < 0 || (uint32_t) slot_idx >= slots) {
             continue;
         }
@@ -866,14 +888,22 @@ void llama_expert_cache::bg_loop() {
             const uint32_t expert = std::get<2>(pk);
             {
                 std::unique_lock<std::mutex> lk(m);
-                if (slot < 0 || slot >= (int32_t) slots_l(this, layer) || !slot_loading[layer][slot]) {
+                // [CGC prefetch fix] the queue marks a prefetch with slot_queued (never
+                // slot_loading: prefetch_slot does not set it), so a job must be treated as
+                // live while queued OR loading. Previously this checked only slot_loading,
+                // which is never set to 1 anywhere -> every queued prefetch was dropped as
+                // stale and the async double-buffer never filled a single slot (prefetch=0/0).
+                if (slot < 0 || slot >= (int32_t) slots_l(this, layer) ||
+                        (!slot_queued[layer][slot] && !slot_loading[layer][slot])) {
                     continue; // stale (cancelled / evicted defensively)
                 }
                 if (slot_owner[layer][slot] != (int32_t) expert) {
                     // slot reassigned by a synchronous fill racing the queue: drop the fill
+                    slot_queued[layer][slot]  = 0;
                     slot_loading[layer][slot] = 0;
                     continue;
                 }
+                slot_loading[layer][slot] = 1; // mark in-flight so ensure_batch waits on us
             }
             fill_pool_direct(this, layer, (uint32_t) slot, expert);
             std::unique_lock<std::mutex> lk(m);
@@ -932,6 +962,12 @@ void llama_expert_cache::pool_loop() {
         // pread OUTSIDE the lock (may block on IO)
         const auto t0 = std::chrono::steady_clock::now();
         const ssize_t rd = pread(fileno(job.f), job.dst, job.bytes, job.offset);
+        if (getenv("CGC_JOBDBG") != nullptr) {
+            fprintf(stderr, "JOBDBG off=%llu bytes=%zu dst=%p rd=%zd first=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+                    (unsigned long long) job.offset, job.bytes, job.dst, rd,
+                    job.dst[0], job.dst[1], job.dst[2], job.dst[3],
+                    job.dst[4], job.dst[5], job.dst[6], job.dst[7]);
+        }
         if (getenv("LLAMA_EXPERT_CACHE_PREAD_DBG") != nullptr && rd != (ssize_t) job.bytes) {
             struct stat st;
             fstat(fileno(job.f), &st);
@@ -1089,6 +1125,18 @@ llama_expert_cache * llama_expert_cache_init(const llama_model * model, size_t b
         cache->slot_loading.resize(max_layer);
         cache->slot_pinned.resize(max_layer);
         cache->slot_pinned_static.resize(max_layer);
+        // [CGC prefetch v2] recently-evicted expert ring (per layer): CGC_EVICTED_RING=N sets
+        // capacity (default 16; 0 = off, keeps the old pure-LRU behavior for A/B).
+        {
+            const char * er = getenv("CGC_EVICTED_RING");
+            uint32_t cap = 16;
+            if (er != nullptr && er[0] != '\0') {
+                long v = atol(er);
+                cap = v <= 0 ? 0 : (uint32_t) std::min<long>(v, 256);
+            }
+            cache->evicted_recent.resize(max_layer);
+            cache->evicted_ring_size.assign(max_layer, cap);
+        }
         for (uint32_t l = 0; l < max_layer; ++l) {
             const uint32_t ns = slots_l(cache, l);
             cache->slot_owner[l].assign(ns, -1);

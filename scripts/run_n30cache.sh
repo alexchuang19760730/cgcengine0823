@@ -21,7 +21,8 @@
 #   N30CACHE_BUDGET=8589934592 ./scripts/run_n30cache.sh -m qwen36 -n 128 -p "..."
 #
 # 可覆寫 env：N30CACHE_MODEL / N30CACHE_BUDGET / N30CACHE_NGL / N30CACHE_WORKERS /
-#             N30CACHE_PIN_PROFILE / N30CACHE_WAKE_POLL_US
+#             N30CACHE_PIN_PROFILE / N30CACHE_WAKE_POLL_US / N30CACHE_PREFETCH_SRC /
+#             N30CACHE_EVICTED_RING
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -47,14 +48,16 @@ SEED="${N30CACHE_SEED:-}"                     # 未設 = llama-simple 預設；b
 # 實測 -c 0（model 預設 4096）+ MTP 必 OOM（kIOGPUCommandBufferCallbackErrorOutOfMemory）。
 # §MTP n_max：draft tokens 數，預設 2（graft blk.40 為 Q4_K，>2 accept rate 不增反降）。
 MTP=0
-MTP_CTX=2048
+# §MTP ctx：draft context 多吃一份 KV/compute buffer，2048 在 35B graft 已會 Metal OOM；
+# 可用 N30CACHE_MTP_CTX 覆寫（MTP 只需短窗，512/1024 較安全）。
+MTP_CTX="${N30CACHE_MTP_CTX:-2048}"
 MTP_N_MAX="${N30CACHE_MTP_N_MAX:-2}"
 
 usage() {
     echo "usage: $0 [-m gemma4|qwen36] [-n tokens] [-p prompt | --prompt-file F] [--ngl N] [--budget BYTES] [--pin-profile F] [--no-cache] [--mtp [N]]
 #   --mtp [N] 啟用 MTP draft-mtp（僅 qwen36 有效，自動切到 graft model + speculative-simple binary，-c 2048 解 OOM）；
 #             N 為 --spec-draft-n-max，預設 2；可用 N30CACHE_MTP_N_MAX 覆寫
-#   env: N30CACHE_N_CB / N30CACHE_SEED / N30CACHE_BUDGET / N30CACHE_NGL / N30CACHE_WORKERS / N30CACHE_MTP_N_MAX 可覆寫" >&2
+#   env: N30CACHE_N_CB / N30CACHE_SEED / N30CACHE_BUDGET / N30CACHE_NGL / N30CACHE_WORKERS / N30CACHE_MTP_N_MAX / N30CACHE_MTP_CTX 可覆寫" >&2
     exit 2
 }
 
@@ -133,6 +136,14 @@ ENVS+=(CGC_N_CB=$N_CB)
 # 消除 sched_yield poll 延遲：qwen36 8.35 → 15.6 t/s，短/長 coding prompt 皆 bit-identical。
 ENVS+=(CGC_SUBMIT_AFTER=1)
 [ -n "${PIN_PROFILE:-}" ] && ENVS+=(LLAMA_EXPERT_CACHE_PIN_PROFILE="$PIN_PROFILE")
+
+# §8.114 async prefetch（A/B 2026-08-23）：CGC_PREFETCH_SRC=hist（rolling window）設為預設
+#   decode 16.02→16.90 t/s（pread_usec -11%）。CGC_EVICTED_RING 預設 0 = off（evicted_recent
+#   重取被逐出 expert 是反 LRU：hit 97.9→97.4%、pread 翻倍、t/s 掉到 15.15，禁用）。
+#   可覆寫：N30CACHE_PREFETCH_SRC（設為空字串關閉）/ N30CACHE_EVICTED_RING
+PF_SRC="${N30CACHE_PREFETCH_SRC:-hist}"
+[ -n "$PF_SRC" ] && ENVS+=(CGC_PREFETCH_SRC=$PF_SRC CGC_PREFETCH_WINDOW=16)
+ENVS+=(CGC_EVICTED_RING=${N30CACHE_EVICTED_RING:-0})
 
 echo "=== n30cache production run ==="
 echo "  model  : $MODEL ($(basename "$M"))"

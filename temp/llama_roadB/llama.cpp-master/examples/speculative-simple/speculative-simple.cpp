@@ -67,6 +67,16 @@ int main(int argc, char ** argv) {
 
     llama_context * ctx_tgt = NULL;
 
+    // [CGC MTP fix] read the bounded-residency expert-cache budget from the env
+    // (mirrors simple.cpp). Without the pool, speculative/MTP pages in the whole
+    // model -> GPU working-set OOM on Apple silicon's ~11.45 GB Metal limit.
+    if (params.expert_cache_bytes == 0) {
+        const char * env_ec = getenv("CGC_EXPERT_CACHE_BYTES");
+        if (env_ec) {
+            params.expert_cache_bytes = std::stoull(env_ec);
+        }
+    }
+
     // load the target model
     auto llama_init_tgt = common_init_from_params(params);
 
@@ -147,8 +157,13 @@ int main(int argc, char ** argv) {
     params.speculative.draft.ctx_dft = ctx_dft.get();
 
     // check if the context supports partial sequence removal
-    const bool use_ckpt_tgt = (common_context_can_seq_rm(ctx_tgt)       == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
-    const bool use_ckpt_dft = !spec_mtp && ctx_dft != nullptr && (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
+    // [CGC MTP fix] common_context_can_seq_rm() runs a probe decode that pulls the whole
+    // model into resident memory (OOM on M4's 10.6GB working-set limit).  For this
+    // recurrent-memory context can_seq_rm returns RS (not FULL) anyway, so the probe result
+    // is never used; skip it under CGC_SKIP_PROBE to avoid the extra full-model decode.
+    const bool skip_probe = getenv("CGC_SKIP_PROBE") != nullptr;
+    const bool use_ckpt_tgt = skip_probe ? false : (common_context_can_seq_rm(ctx_tgt) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
+    const bool use_ckpt_dft = skip_probe ? false : !spec_mtp && ctx_dft != nullptr && (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
 
     if (use_ckpt_tgt) {
         LOG_INF("speculative decoding will use checkpoints (context does not support partial sequence removal)\n");
@@ -186,8 +201,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (llama_n_batch(ctx_tgt) < (uint32_t) inp.size()) {
-        LOG_ERR("%s: the prompt exceeds the batch size (%d tokens, batch %d)\n", __func__, (int) inp.size(), llama_n_batch(ctx_tgt));
+    // [CGC MTP fix] the expert-cache pool caps n_batch to 1, so the prompt is
+    // processed in chunks of llama_n_batch() below instead of requiring one big batch.
+    if (llama_n_batch(ctx_tgt) < 1) {
+        LOG_ERR("%s: the batch size is zero (%d)\n", __func__, llama_n_batch(ctx_tgt));
 
         return 1;
     }
@@ -274,23 +291,43 @@ int main(int argc, char ** argv) {
     // prompt decode is needed -- the driver's process() captures the hidden states)
     // note: use a properly-formed batch (pos/seq_id) -- llama_batch_get_one leaves them
     // null, and the MTP driver's process() dereferences seq_id[k][0] directly.
+    // [CGC MTP fix] chunk by llama_n_batch(): the expert-cache pool caps n_batch to 1,
+    // and the pool path is only correct for single-token steps.
     {
-        llama_batch batch_enc = llama_batch_init(inp.size() - 1, 0, 1);
-        for (size_t i = 0; i < inp.size() - 1; ++i) {
-            common_batch_add(batch_enc, inp[i], (llama_pos) i, { 0 }, i == inp.size() - 2);
+        const uint32_t n_batch_enc = llama_n_batch(ctx_tgt);
+        const size_t   n_enc       = inp.size() - 1;
+        llama_batch batch_enc = llama_batch_init(n_batch_enc, 0, 1);
+        for (size_t i0 = 0; i0 < n_enc; i0 += n_batch_enc) {
+            const size_t n_tok = std::min((size_t) n_batch_enc, n_enc - i0);
+            common_batch_clear(batch_enc);
+            for (size_t j = 0; j < n_tok; ++j) {
+                common_batch_add(batch_enc, inp[i0 + j], (llama_pos)(i0 + j), { 0 }, (i0 + j) == n_enc - 1);
+            }
+            if (getenv("CGC_MTP_DBG")) {
+                fprintf(stderr, "MTPDBG prompt_enc: chunk i0=%zu n_tokens=%d id_last=%d\n",
+                        i0, batch_enc.n_tokens, id_last);
+                fflush(stderr);
+            }
+            llama_decode(ctx_tgt, batch_enc);
+            common_speculative_process(spec, batch_enc);
         }
-        if (getenv("CGC_MTP_DBG")) {
-            fprintf(stderr, "MTPDBG prompt_enc: inp.size=%zu batch_enc.n_tokens=%d id_last=%d\n",
-                    inp.size(), batch_enc.n_tokens, id_last);
-            fflush(stderr);
-        }
-        llama_decode(ctx_tgt, batch_enc);
-        common_speculative_process(spec, batch_enc);
         llama_batch_free(batch_enc);
     }
 #endif
     if (!spec_mtp && ctx_dft != nullptr) {
-        llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
+        // [CGC MTP fix] chunk by llama_n_batch() (the expert-cache pool caps n_batch to 1)
+        const uint32_t n_batch_dft = llama_n_batch(ctx_dft.get());
+        const size_t   n_enc       = inp.size() - 1;
+        llama_batch batch_dft = llama_batch_init(n_batch_dft, 0, 1);
+        for (size_t i0 = 0; i0 < n_enc; i0 += n_batch_dft) {
+            const size_t n_tok = std::min((size_t) n_batch_dft, n_enc - i0);
+            common_batch_clear(batch_dft);
+            for (size_t j = 0; j < n_tok; ++j) {
+                common_batch_add(batch_dft, inp[i0 + j], (llama_pos)(i0 + j), { 0 }, (i0 + j) == n_enc - 1);
+            }
+            llama_decode(ctx_dft.get(), batch_dft);
+        }
+        llama_batch_free(batch_dft);
     }
 
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
@@ -303,6 +340,11 @@ int main(int argc, char ** argv) {
     const auto t_enc_end = ggml_time_us();
 
     const auto t_dec_start = ggml_time_us();
+
+    // [CGC MTP timing] macro breakdown of the decode loop (guard: CGC_MTP_TIMING)
+    double mt_t_draft = 0.0, mt_t_process = 0.0, mt_t_verify = 0.0;
+    int    mt_n_draft = 0,   mt_n_process = 0,   mt_n_verify = 0;
+    const bool mt_timing = getenv("CGC_MTP_TIMING") != nullptr;
 
     while (true) {
         // generate or reuse draft tokens
@@ -332,7 +374,9 @@ int main(int argc, char ** argv) {
                     /* .prompt     = */ &prompt_tgt,
                     /* .result     = */ &draft, // output
                 };
+                auto mt_t0 = ggml_time_us();
                 common_speculative_draft(spec);
+                if (mt_timing) { mt_t_draft += (ggml_time_us() - mt_t0) / 1e6; mt_n_draft++; }
             }
 
             // save the original draft size
@@ -370,9 +414,13 @@ int main(int argc, char ** argv) {
 
             //LOG_DBG("target batch: %s\n", string_from(ctx_tgt, batch_tgt).c_str());
 
+            auto mt_t1 = ggml_time_us();
             llama_decode(ctx_tgt, batch_tgt);
+            if (mt_timing) { mt_t_verify += (ggml_time_us() - mt_t1) / 1e6; mt_n_verify++; }
 #ifdef MTP_SUPPORT
+            mt_t1 = ggml_time_us();
             common_speculative_process(spec, batch_tgt);
+            if (mt_timing) { mt_t_process += (ggml_time_us() - mt_t1) / 1e6; mt_n_process++; }
 #endif
         }
 
@@ -491,6 +539,14 @@ int main(int argc, char ** argv) {
 
     LOG_INF("encoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_input,   (t_enc_end - t_enc_start) / 1e6f, inp.size() / ((t_enc_end - t_enc_start) / 1e6f));
     LOG_INF("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_predict, (t_dec_end - t_dec_start) / 1e6f, n_predict  / ((t_dec_end - t_dec_start) / 1e6f));
+
+    if (mt_timing) {
+        const double t_tot = mt_t_draft + mt_t_process + mt_t_verify;
+        LOG_INF("[CGC MTP timing] draft  : %8.3f s over %d calls (avg %7.3f ms)  %.1f%%\n", mt_t_draft,  mt_n_draft,  mt_n_draft  ? mt_t_draft  * 1e3 / mt_n_draft  : 0, 100.0 * mt_t_draft  / t_tot);
+        LOG_INF("[CGC MTP timing] process: %8.3f s over %d calls (avg %7.3f ms)  %.1f%%\n", mt_t_process, mt_n_process, mt_n_process ? mt_t_process * 1e3 / mt_n_process : 0, 100.0 * mt_t_process / t_tot);
+        LOG_INF("[CGC MTP timing] verify : %8.3f s over %d calls (avg %7.3f ms)  %.1f%%\n", mt_t_verify,  mt_n_verify,  mt_n_verify  ? mt_t_verify  * 1e3 / mt_n_verify  : 0, 100.0 * mt_t_verify  / t_tot);
+        LOG_INF("[CGC MTP timing] other  : %8.3f s  (loop overhead)          %.1f%%\n", (t_dec_end - t_dec_start) / 1e6f - t_tot, 100.0 * fmax(0.0, (t_dec_end - t_dec_start) / 1e6f - t_tot) / fmax(1e-9, (t_dec_end - t_dec_start) / 1e6f));
+    }
 
     LOG_INF("\n");
     LOG_INF("n_draft   = %d\n", params_spec.draft.n_max);

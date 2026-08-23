@@ -2044,12 +2044,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // using the raw ids because they index the gating probs by expert.
     ggml_tensor * remap_ids = nullptr;
     const char * dw_env = getenv("LLAMA_EXPERT_CACHE_DISABLE_WRITE");
-    // Only single-token decode needs the remap leaf (cache slot / gather repointing). During
-    // prefill (n_tokens > 1) the FFN runs over the full expert weights, so the mul_mat_id must
-    // keep using the raw top-k ids. Creating a set_output leaf here would perturb the ggml-alloc
-    // buffer layout and corrupt the cross-layer conv_state buffers (observed: conv_input-1 diverges
-    // while layer 0 is bit-identical), so we must NOT create it for prefill.
-    if (expert_cache_active && !(dw_env && dw_env[0]) && n_tokens == 1 && il >= 0 && il < n_layer) {
+    // [CGC MTP fix] the remap leaf is no longer restricted to single-token steps: small
+    // multi-token batches (speculative/MTP verify, <= cgc_pool_max_tokens()) also take the
+    // pool path -- the eval hook ensures the union of routed experts across ALL tokens and
+    // writes slot ids for every token. Large prefill batches still run over the full expert
+    // weights with the raw ids (no leaf): the routed union would overflow the bounded pool
+    // slots anyway, and a set_output leaf at that size perturbs the ggml-alloc layout (see
+    // the original note about conv_state buffer corruption below).
+    if (expert_cache_active && !(dw_env && dw_env[0]) && n_tokens >= 1 &&
+            (uint64_t) n_tokens <= cgc_pool_max_tokens() && il >= 0 && il < n_layer + n_layer_nextn) {
         ggml_tensor * remap = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_expert_used, n_tokens);
         ggml_set_output(remap); // prevent ggml-alloc from overwriting the hook-written ids before mul_mat_id consumes them
         cb(remap, "ffn_moe_topk_remap", il);

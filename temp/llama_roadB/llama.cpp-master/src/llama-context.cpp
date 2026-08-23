@@ -247,17 +247,22 @@ llama_context::llama_context(
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
 
     // CGC expert-cache L4: the per-layer expert tensors are SHRUNK to the bounded pool capacity,
-    // so a multi-token (n_tokens > 1) prefill graph would read full-range router ids (0..n_expert-1)
-    // against a capacity-slot tensor -> OOB -> NaN -> garbage downstream (observed: layer-1 routes
-    // to experts >= capacity, layer-2+ router probs become NaN). The pool path is only correct for
-    // single-token steps (n_tokens == 1): the remap leaf is built, the hook maps expert ids to slot
-    // indices, and the FFN reads the pool region by slot. So when the pool is active we must cap
-    // n_batch to 1 so EVERY step (including prefill tokens) goes through the single-token pool
-    // path. Chunked callers (mtmd, warmup) must read the capped value via llama_n_batch().
+    // so a multi-token (n_tokens > cgc_pool_max_tokens()) prefill graph would read full-range
+    // router ids (0..n_expert-1) against a capacity-slot tensor -> OOB -> NaN -> garbage downstream
+    // (observed: layer-1 routes to experts >= capacity, layer-2+ router probs become NaN). The pool
+    // path is correct for single-token AND small multi-token steps (n_tokens <= cgc_pool_max_tokens()):
+    // the remap leaf is built, the hook maps expert ids to slot indices (union across all tokens),
+    // and the FFN reads the pool region by slot. So when the pool is active we cap n_batch to
+    // cgc_pool_max_tokens() so speculative/MTP verify batches (n_max+1 <= cap) flow through the pool
+    // path, while still bounding every step to the pool (never the full model). Chunked callers
+    // (mtmd, warmup) must read the capped value via llama_n_batch().
     if (model.expert_cache_pool_capacity > 0 && cparams.n_batch > 1) {
-        cparams.n_batch = 1;
-        LLAMA_LOG_INFO("%s: L4 pool capacity=%zu -> n_batch capped to 1 (prefill must run single-token through the pool path; multi-token prefill reads shrunk tensors OOB)\n",
-                __func__, model.expert_cache_pool_capacity);
+        const uint32_t pmax = cgc_pool_max_tokens();
+        if (cparams.n_batch > pmax) {
+            cparams.n_batch = pmax;
+            LLAMA_LOG_INFO("%s: L4 pool capacity=%zu -> n_batch capped to %u (multi-token pool path up to %u tokens; larger batches read shrunk tensors OOB)\n",
+                    __func__, model.expert_cache_pool_capacity, pmax, pmax);
+        }
     }
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
@@ -1458,7 +1463,8 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     // routed experts from prefill (recorded by the hook via record_routes). One-time sync
     // cold-start preads; a no-op on later steps (hot_prewarm_done). Together with the B
     // async prefetch this keeps the working set warm from the very first decode token.
-    if (model.expert_cache_active && ubatch.n_tokens == 1) {
+    // [CGC MTP fix] allow multi-token pool steps (speculative/MTP verify) too.
+    if (model.expert_cache_active && (uint32_t) ubatch.n_tokens <= cgc_pool_max_tokens()) {
         llama_expert_cache * ec = model.expert_cache;
         if (ec != nullptr && llama_expert_cache_pool_active(ec)) {
             llama_expert_cache_prewarm_hot(ec);
@@ -1484,28 +1490,106 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
     }
 
-    // B: async-prefetch the step's per-layer expert unions into the pool's bg thread so the
-    // NEXT decode step's ensure_batch mostly hits (temporal locality). prefetch_slot is
-    // non-blocking (free-slot-only, never evicts a resident) and overlaps the disk IO with the
-    // sampler + next step's whole GPU window instead of stalling the hook on synchronous preads.
-    if (model.expert_cache_active && ubatch.n_tokens == 1) {
+    // B: async-prefetch predicted next-step experts into the pool's bg thread so the NEXT decode
+    // step's ensure_batch mostly hits (temporal locality). prefetch_slot is non-blocking
+    // (free-slot-only / LRU-evict-a-non-union-slot) and overlaps the disk IO with the sampler +
+    // next step's whole GPU window instead of stalling the hook on synchronous preads.
+    // [CGC MTP fix] allow multi-token pool steps (speculative/MTP verify) too.
+    // [CGC prefetch fix] source selection (CGC_PREFETCH_SRC):
+    //   - default / "step": the OLD behaviour — this step's union, which the hook just ensured
+    //     (all resident) -> prefetch_slot drops everything (prefetch=0/0), so the 2.1% cold
+    //     misses still blocked the hook for ~167us/layer. Kept for A/B.
+    //   - "prev": the previous step's union — partially LRU-evicted, but with a 5GiB pool most
+    //     is still resident, so little to prefetch.
+    //   - "hist" (recommended): a rolling window (CGC_PREFETCH_WINDOW=N, default 4) of recent
+    //     step unions per layer. Miss analysis: 1062 misses = only 80 distinct experts, 72 of
+    //     them repeated (e243 missed 28x) — i.e. recurring hot experts evicted by LRU between
+    //     uses. Prefetching the recent window's non-resident members re-residents exactly those
+    //     before the next step needs them.
+    // NOTE: prefetch_slot was previously DEAD CODE — bg_loop checked slot_loading (never set to
+    // 1) instead of slot_queued, so every queued prefetch was dropped as stale. Fixed in
+    // llama-expert-cache.cpp bg_loop. drain_layer still drops not-yet-started (slot_queued)
+    // fills for a layer whose hook fires before the bg thread reached them — inherent to the
+    // single-buffer window; hist reduces the misses that remain.
+    static const char * pf_src_env = getenv("CGC_PREFETCH_SRC");
+    static const bool pf_prev = pf_src_env != nullptr && strcmp(pf_src_env, "prev") == 0;
+    static const bool pf_hist = pf_src_env != nullptr && strcmp(pf_src_env, "hist") == 0;
+    static const size_t pf_win = []() {
+        const char * w = getenv("CGC_PREFETCH_WINDOW");
+        size_t v = 4;
+        if (w != nullptr && w[0] != '\0') {
+            v = (size_t) atoi(w);
+            if (v < 1) v = 1;
+            if (v > 16) v = 16;
+        }
+        return v;
+    }();
+    if (model.expert_cache_active && (uint32_t) ubatch.n_tokens <= cgc_pool_max_tokens()) {
         llama_expert_cache * ec = model.expert_cache;
-        if (ec != nullptr && llama_expert_cache_pool_active(ec) && !cache_step_union.empty()) {
-            const size_t n_l = (size_t) model.hparams.n_layer();
-            for (size_t il = 0; il < cache_step_union.size() && il < n_l; ++il) {
-                const auto & v = cache_step_union[il];
-                if (v.empty()) {
-                    continue;
+        if (ec != nullptr && llama_expert_cache_pool_active(ec)) {
+            if (pf_hist) {
+                // roll the current step's union into the per-layer history window (do this
+                // before the rotate below clears cache_step_union), then prefetch the window.
+                if (cache_tail_union.size() < (size_t) model.hparams.n_layer_all) {
+                    cache_tail_union.resize(model.hparams.n_layer_all);
                 }
-                for (uint32_t e : v) {
-                    llama_expert_cache_prefetch_slot(ec, (uint32_t) il, e);
+                for (size_t il = 0; il < cache_step_union.size() && il < (size_t) model.hparams.n_layer_all; ++il) {
+                    auto & dq = cache_tail_union[il];
+                    if (!cache_step_union[il].empty()) {
+                        dq.push_back(cache_step_union[il]);
+                        while (dq.size() > pf_win) {
+                            dq.pop_front();
+                        }
+                    }
+                    if (getenv("CGC_TAIL_DBG") != nullptr) {
+                        static int dbg_n = 0;
+                        if (il == 5 && dbg_n++ < 4) {
+                            fprintf(stderr, "TAILDBG layer=%zu dq=%zu", il, dq.size());
+                            for (const auto & u : dq) {
+                                fprintf(stderr, " u%zu", u.size());
+                            }
+                            fprintf(stderr, "\n");
+                        }
+                    }
+                    for (const auto & u : dq) {
+                        for (uint32_t e : u) {
+                            llama_expert_cache_prefetch_slot(ec, (uint32_t) il, e);
+                        }
+                    }
+                    // [CGC prefetch v2] also re-prefetch the recently-evicted experts (ring
+                    // recorded by pick_slot on LRU eviction): recurring hot experts that LRU
+                    // dropped between uses. Re-resident before the next ensure so it HITs
+                    // instead of preading. CGC_EVICTED_RING=0 disables (A/B control).
+                    // NOTE: iterate a COPY — prefetch_slot can evict another slot (and thus
+                    // push_back into this same ring) while holding cache->m, which would
+                    // invalidate a live range-for over the vector.
+                    if (il < ec->evicted_recent.size() && !ec->evicted_recent[il].empty()) {
+                        const std::vector<uint32_t> ev_snap = ec->evicted_recent[il];
+                        for (uint32_t e : ev_snap) {
+                            llama_expert_cache_prefetch_slot(ec, (uint32_t) il, e);
+                        }
+                    }
+                }
+            } else {
+                const auto & pf_src = pf_prev ? cache_prev_union : cache_step_union;
+                if (!pf_src.empty()) {
+                    const size_t n_l = (size_t) model.hparams.n_layer();
+                    for (size_t il = 0; il < pf_src.size() && il < n_l; ++il) {
+                        const auto & v = pf_src[il];
+                        if (v.empty()) {
+                            continue;
+                        }
+                        for (uint32_t e : v) {
+                            llama_expert_cache_prefetch_slot(ec, (uint32_t) il, e);
+                        }
+                    }
                 }
             }
         }
         // rotate: this step becomes the previous step; clear the buffer for the next build.
         cache_prev_union.swap(cache_step_union);
-        if (cache_step_union.size() < (size_t) model.hparams.n_layer()) {
-            cache_step_union.resize(model.hparams.n_layer());
+        if (cache_step_union.size() < (size_t) model.hparams.n_layer_all) {
+            cache_step_union.resize(model.hparams.n_layer_all);
         }
         for (auto & v : cache_step_union) {
             v.clear();
@@ -1607,6 +1691,15 @@ int llama_context::encode(const llama_batch & batch_inp) {
         GGML_ASSERT(logits.data != nullptr);
 
         ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_tokens*n_vocab*sizeof(float));
+        if (getenv("CGC_LOGITS_DBG") != nullptr) {
+            const int64_t nt = n_tokens > 0 ? n_tokens : 1;
+            fprintf(stderr, "LOGITS nt=%lld last=", (long long) nt);
+            const float * lt = logits.data + (nt - 1) * model.vocab.n_tokens();
+            for (int k = 0; k < 12; ++k) {
+                fprintf(stderr, "%.4f ", lt[k]);
+            }
+            fprintf(stderr, "\n");
+        }
     }
 
     // extract embeddings
@@ -1994,6 +2087,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
                 ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+            }
+            if (getenv("CGC_LOGITS_DBG") != nullptr && n_outputs > 0) {
+                const int64_t nv = model.vocab.n_tokens();
+                fprintf(stderr, "LOGITS2 nt=%d last=", n_outputs);
+                const float * lt = logits.data + (n_outputs_prev + n_outputs - 1) * nv;
+                for (int k = 0; k < 12; ++k) {
+                    fprintf(stderr, "%.4f ", lt[k]);
+                }
+                fprintf(stderr, "\n");
             }
         }
 
@@ -2663,7 +2765,11 @@ void llama_context::expert_cache_on_topk(ggml_tensor * t) {
         return;
     }
     const int il = atoi(dash + 1);
-    if (il < 0 || il >= (int) model.hparams.n_layer()) {
+    // [CGC MTP fix] accept the MTP draft block layer (il == n_layer()) too: its layer-N expert
+    // tensors are shrunk to the bounded pool capacity and the draft graph repoints them at the
+    // pool regions, so the hook MUST ensure/fill layer-N slots and write its remap leaf. Using
+    // n_layer_all (trunk + nextn) keeps the original non-MTP behaviour for the trunk layers.
+    if (il < 0 || il >= (int) model.hparams.n_layer_all) {
         return;
     }
 
@@ -2725,6 +2831,9 @@ void llama_context::expert_cache_on_topk(ggml_tensor * t) {
 
     // build the per-step union (dedup + sorted) and the raw route list. The top-k ids tensor is
     // [n_expert_used, n_tokens] in ggml layout (ne[0] fastest), so element (i, j) is at i + j*n_expert_used.
+    static int64_t hk_u_us = 0, hk_e_us = 0, hk_r_us = 0, hk_n = 0;
+    static bool hk_dbg = getenv("CGC_HOOK_DBG") != nullptr;
+    const int64_t hk_t0 = ggml_time_us();
     std::unordered_map<uint32_t, uint32_t> umap;
     std::vector<uint32_t> uni;
     std::vector<uint32_t> routes;
@@ -2751,11 +2860,15 @@ void llama_context::expert_cache_on_topk(ggml_tensor * t) {
     for (size_t k = 0; k < uni.size(); ++k) {
         uidx[uni[k]] = (uint32_t) k;
     }
+    const int64_t hk_t1 = ggml_time_us();
 
-    // prefill (multi-token): record route frequencies for the hot prewarm; the FFN tensors were
-    // restored above, so prefill computes over the full expert weights. No remap leaf is created
-    // for prefill (graph.cpp builds it only when n_tokens == 1), so there is nothing to fill here.
-    if (n_tokens > 1) {
+    // large prefill (multi-token beyond the pool path): record route frequencies for the hot
+    // prewarm; the FFN tensors were restored above, so it computes over the full expert weights.
+    // No remap leaf is created for such batches (graph.cpp builds it only when n_tokens <=
+    // cgc_pool_max_tokens()), so there is nothing to fill here. Small multi-token batches
+    // (speculative/MTP verify) fall through to the pool/gather path below, where the union spans
+    // ALL tokens and the remap leaf is written for every token.
+    if ((uint64_t) n_tokens > cgc_pool_max_tokens()) {
         llama_expert_cache_record_routes(cache, (uint32_t) il, routes.data(), routes.size());
         return;
     }
@@ -2766,8 +2879,11 @@ void llama_context::expert_cache_on_topk(ggml_tensor * t) {
     // L3-B per-step gather path.
     const uint32_t n_slots = llama_expert_cache_slots_per_layer_l(cache, (uint32_t) il);
     if (llama_expert_cache_pool_active(cache) && uni.size() <= n_slots) {
+        const int64_t hk_t1b = ggml_time_us();
         llama_expert_cache_ensure_batch(cache, (uint32_t) il, uni.data(), uni.size());
+        const int64_t hk_t1c = ggml_time_us();
         llama_expert_cache_drain_layer(cache, (uint32_t) il);
+        const int64_t hk_t2 = ggml_time_us();
 
         // NOTE: the FFN expert weight tensors were already repointed at the pool regions in
         // graph_get_cb (ffn_moe_topk_remap); the segmented dispatch submits with those pointers.
@@ -2783,15 +2899,72 @@ void llama_context::expert_cache_on_topk(ggml_tensor * t) {
                     rd[i + j * n_expert_used] = (st != nullptr && e < n_expert) ? st[e] : (int32_t) e;
                 }
             }
+            if (getenv("CGC_REMAP_DBG") != nullptr && n_tokens > 1) {
+                static int rdbg_step = 0;
+                if (rdbg_step < 2 && il < 4) {
+                    fprintf(stderr, "REMAP il=%d nt=%lld ne=%lld", il, (long long) n_tokens, (long long) n_expert_used);
+                    for (int64_t j = 0; j < n_tokens; ++j) {
+                        fprintf(stderr, " |t%d:", (int) j);
+                        for (int64_t i = 0; i < n_expert_used; ++i) {
+                            const uint32_t e = (uint32_t) ids[i + j * n_expert_used];
+                            fprintf(stderr, " e%u->%d", e, rd[i + j * n_expert_used]);
+                        }
+                    }
+                    fprintf(stderr, "\n");
+                    rdbg_step++;
+                }
+            }
+        }
+
+        if (getenv("CGC_POOL_DATA_DBG") != nullptr && (n_tokens == 1 || n_tokens > 1) && il == 1) {
+            static int dbg_step = 0;
+            if (dbg_step++ < 1) {
+                const int32_t * st = llama_expert_cache_slot_table(cache, (uint32_t) il);
+                for (int kind = 0; kind < 4; ++kind) {
+                    const uint8_t * base = llama_expert_cache_pool_data(cache, (uint32_t) il, kind);
+                    size_t stride = llama_expert_cache_pool_stride(cache, (uint32_t) il, kind);
+                    if (base == nullptr || stride == 0) {
+                        continue;
+                    }
+                    fprintf(stderr, "PDATA il=%d kind=%d stride=%zu nt=%lld", il, kind, stride, (long long) n_tokens);
+                    for (int64_t i = 0; i < n_expert_used; ++i) {
+                        const uint32_t e = (uint32_t) ids[i];
+                        const int32_t s = (st != nullptr && e < n_expert) ? st[e] : -1;
+                        if (s >= 0) {
+                            fprintf(stderr, " e%u->s%d [", e, s);
+                            for (int b = 0; b < 16; ++b) {
+                                fprintf(stderr, "%02x", base[s*stride+b]);
+                            }
+                            fprintf(stderr, "]");
+                        }
+                    }
+                    fprintf(stderr, "\n");
+                }
+            }
         }
 
         // B: record this step's per-layer union so process_ubatch can async-prefetch it for the
         // next decode step (temporal locality). The bg fill runs behind the sampler + next step's
         // GPU window, so the next step's ensure_batch hits instead of blocking on disk reads.
-        if (cache_step_union.size() < (size_t) model.hparams.n_layer()) {
-            cache_step_union.resize(model.hparams.n_layer());
+        // [CGC MTP fix] size by n_layer_all so the MTP draft block layer (il == n_layer()) fits.
+        if (cache_step_union.size() < (size_t) model.hparams.n_layer_all) {
+            cache_step_union.resize(model.hparams.n_layer_all);
         }
         cache_step_union[(size_t) il] = uni;
+        if (hk_dbg) {
+            hk_u_us += hk_t1 - hk_t0;
+            hk_e_us += hk_t2 - hk_t1;
+            hk_r_us += ggml_time_us() - hk_t2;
+            static int64_t hk_es_us = 0, hk_dr_us = 0;
+            hk_es_us += hk_t1c - hk_t1b;
+            hk_dr_us += hk_t2 - hk_t1c;
+            hk_n++;
+            if (hk_n % 64 == 0) {
+                fprintf(stderr, "CGC-HOOK: union=%.1f ensure=%.1f drain=%.1f remap=%.1f us (n=%lld)\n",
+                        (double) hk_u_us / hk_n, (double) hk_es_us / hk_n,
+                        (double) hk_dr_us / hk_n, (double) hk_r_us / hk_n, (long long) hk_n);
+            }
+        }
         return;
     }
 
