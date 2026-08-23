@@ -230,14 +230,14 @@ build/bin/libllama.0.0.16.dylib <span class="cmt"># 引擎（含 expert-cache ho
   <h2>⑥ 版本存放位置（git + GitHub）</h2>
   <table>
     <tr><th>位置</th><th>內容</th></tr>
-    <tr><td>本地 branch</td><td><b>expert-cache-fork</b> @ <span class="code">c0a53f9</span>（HEAD；含本報告 commit）</td></tr>
+    <tr><td>本地 branch</td><td><b>expert-cache-fork</b> @ <span class="code">f7afd63</span>（HEAD；含本報告 commit）</td></tr>
     <tr><td>本地 remote</td><td><span class="code">github0823</span> → git@github.com:alexchuang19760730/cgcengine0823.git（SSH；HTTPS 因 credential 帶到錯誤帳號不可用）</td></tr>
     <tr><td>遠端 GitHub</td><td><a style="color:var(--sdpa)" href="https://github.com/alexchuang19760730/cgcengine0823">github.com/alexchuang19760730/cgcengine0823</a> · branch <b>expert-cache-fork</b>（已 push，請設為預設分支）</td></tr>
     <tr><td>本報告</td><td><span class="code">moeexpert/CGC_TPOT_延遲分解_2026-08-23.html</span>（仿 08-22 格式）</td></tr>
     <tr><td>未提交實驗</td><td>LAYER_CAPS / whole-graph 在 stash（<span class="code">session-layercaps-wholegraph-experiments</span>），不屬此版本</td></tr>
   </table>
 
-  <p class="note"><b>commit 歷史（此版本）</b>：<span class="code">c0a53f9</span>（HEAD）async prefetch hist-only 上生產 + evicted_recent A/B 禁用（§8.114，本報告 ④b）→ <span class="code">7498c2b</span> docs 08-23 建置與測量報告 → <span class="code">f9c9ee3</span> run_n30cache.sh 計時拆解 → <span class="code">780185a</span> docs 08-22 TPOT 分解 → <span class="code">a06090a</span> semaphore wake + PIN_PROFILE + submit-after（生產核心）。</p>
+  <p class="note"><b>commit 歷史（此版本）</b>：<span class="code">f7afd63</span>（HEAD）async prefetch hist-only 上生產 + evicted_recent A/B 禁用（§8.114，本報告 ④b）→ <span class="code">7498c2b</span> docs 08-23 建置與測量報告 → <span class="code">f9c9ee3</span> run_n30cache.sh 計時拆解 → <span class="code">780185a</span> docs 08-22 TPOT 分解 → <span class="code">a06090a</span> semaphore wake + PIN_PROFILE + submit-after（生產核心）。</p>
 </div>
 
 <p class="sub" style="margin-top:24px">數據：08-23 實測（git committed source + 重建 build/bin/llama-simple；France n=384：load 11.14s/6.68s、prefill 1.02s/6tok、eval 61.8-62.3ms/tok → 16.0-16.2 t/s、hit 95.9%、bit-identical ✓；CGC-PHASE 熱身 90.3→57.2ms）。async prefetch A/B（§8.114）：hist-only decode 16.02→16.90 t/s（pread_usec -11%）；evicted_recent 反 LRU 禁用。per-segment GPU/hook 分解沿用 08-22 CGC-SEG（45/14.5/5ms 結構不變）。</p>
