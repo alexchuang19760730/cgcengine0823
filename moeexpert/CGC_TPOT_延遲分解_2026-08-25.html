@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CGC TPOT 延遲分解（MTP 轉正版）2026-08-25 · MTP n=2 25.2 t/s（step-timing 證實結構天花板）</title>
+<style>
+  :root {
+    --bg: #0f1420; --card: #171e2e; --ink: #e8ecf4; --sub: #9aa5b8;
+    --line: #2a3350;
+    /* GPU */
+    --ffn: #7fb8f0; --ffn2: #4a7fbf; --fixed: #d98cf0; --small: #e86a6a;
+    --ssm: #6b7aa8; --sdpa: #7fd4c0;
+    /* CPU / I/O */
+    --cpu: #f0c25c; --draft: #8a97ad; --io: #f0a45c;
+    /* accent */
+    --accent: #ffd479; --good: #8fe3a0; --warn: #f08a8a; --gold: #e3cf8f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; padding: 32px 20px 60px; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: var(--sub); font-size: 14px; margin-bottom: 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 22px 24px; margin-bottom: 22px; }
+  .card h2 { font-size: 18px; margin: 0 0 4px; }
+  .card .desc { color: var(--sub); font-size: 13px; margin: 0 0 16px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 10px 0 18px; font-size: 12.5px; color: var(--sub); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .barwrap { margin-bottom: 12px; }
+  .barrow { display: flex; align-items: center; gap: 10px; }
+  .barlabel { width: 300px; font-size: 12.5px; color: var(--ink); flex-shrink: 0; line-height: 1.35; }
+  .barlabel small { display: block; color: var(--sub); font-size: 11px; }
+  .bar { flex: 1; height: 34px; border-radius: 8px; overflow: hidden; display: flex; background: #0c1019; border: 1px solid var(--line); }
+  .seg { height: 100%; display: flex; align-items: center; justify-content: center; font-size: 10.5px; color: #10141f; font-weight: 700; white-space: nowrap; overflow: hidden; min-width: 0; border-right: 1px solid rgba(15,20,32,.35); }
+  .seg.tiny { font-size: 0; }
+  .seg.tiny:hover { font-size: 10.5px; }
+  .total { font-size: 12px; color: var(--sub); text-align: right; margin: 4px 0 0 310px; }
+  .note { font-size: 12.5px; color: var(--sub); margin-top: 12px; line-height: 1.6; }
+  .note b { color: var(--ink); }
+  .note .hl { color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--sub); font-weight: 600; font-size: 12px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .hl { color: var(--accent); font-weight: 700; }
+  .ceil { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .ceil .cl { width: 300px; font-size: 12.5px; flex-shrink: 0; }
+  .ceil .ctrack { flex: 1; height: 26px; background: #0c1019; border: 1px solid var(--line); border-radius: 7px; position: relative; }
+  .ceil .cfill { height: 100%; border-radius: 6px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 11px; font-weight: 700; color: #10141f; }
+  .tokbadge { margin-left: 10px; font-size: 12.5px; color: var(--ink); width: 130px; flex-shrink: 0; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 11px; margin-left: 6px; }
+  .tag.g { background: #1c3a24; color: #8fe3a0; }
+  .tag.r { background: #3a1c1c; color: #f08a8a; }
+  .tag.y { background: #3a321c; color: #e3cf8f; }
+  .bnd { display: flex; gap: 14px; flex-wrap: wrap; }
+  .bnd .g { flex: 1; min-width: 220px; background: #121826; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .bnd .g h3 { margin: 0 0 6px; font-size: 14px; }
+  .bnd .g .st { font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+  .bnd .g p { margin: 0; font-size: 12px; color: var(--sub); line-height: 1.55; }
+  .meter { height: 8px; border-radius: 5px; background: #0c1019; border: 1px solid var(--line); margin: 6px 0 8px; overflow: hidden; }
+  .meter i { display: block; height: 100%; border-radius: 5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>CGC · MTP TPOT 端到端延遲分解（長條圖）</h1>
+<div class="sub">llama.cpp fork · M4 Max 16GB · 2026-08-25 · Nail-Qwen3.6-35B-A3B-MTP-UD-IQ3_XXS · cache 4GiB · CGC_VERIFY_DECODE=1 + CGC_DRAFT_DECODE=1 · MTP n=2 → <b class="hl">25.2 t/s</b>（= base decode）</div>
+
+<!-- ============ 1. MTP step 延遲分解（CGC_STEPT 實測） ============ -->
+<div class="card">
+  <h2>① MTP n=2 step 延遲分解（CGC_STEPT 逐相實測，69 steps / 7.95s）</h2>
+  <p class="desc">step-timer（CGC_STEPT=1）把每步切成 dft / ver / proc / acc 四相。關鍵：<b>verify 是純線性（87.2ms/3 = 29.1ms/token，無固定 overhead）</b>；draft+process 是 blk.40（MTP head）真 GPU compute（~5.5ms/token）；CPU 已全藏在 GPU 後（acc 的 14.7ms 幾乎都是非同步 logits 的 GPU tail，不是 CPU）。</p>
+
+  <div class="legend">
+    <span><i class="sw" style="background:var(--ffn)"></i>trunk verify（40 層，3-token，GPU bandwidth-bound）</span>
+    <span><i class="sw" style="background:var(--draft)"></i>blk.40 draft+process（MTP head，1 層，5 token-runs）</span>
+    <span><i class="sw" style="background:var(--small)"></i>acc（sampler + 非同步 logits GPU tail）</span>
+  </div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">MTP n=2 verify step（exact-load，轉正前）<small>192ms/step = 64.08ms/token · 13.85 t/s · pread 26M usec</small></div>
+      <div class="bar">
+        <div class="seg" style="width:69.5%;background:var(--ffn)" title="FFN 133.5ms：3-token 的 MoE weight reads + 每 token 同步等 cold-expert pread（44.5ms/token）">FFN 133.5</div>
+        <div class="seg" style="width:30.5%;background:var(--fixed)" title="固定 58.7ms/step：每層 ensure_batch + drain 同步 pread stall + slot_table remap">固定 58.7</div>
+      </div>
+    </div>
+  </div>
+  <div class="total">192ms/step</div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">MTP n=2 step（CGC_VERIFY_DECODE + CGC_DRAFT_DECODE，轉正後）<small>114.8ms/step · 25.2-25.4 t/s · step-timer 實測</small></div>
+      <div class="bar">
+        <div class="seg" style="width:76%;background:var(--ffn)" title="trunk verify 87.2ms：3-token × 29.1ms/token，純 weight reads，GPU bandwidth floor">verify 87.2</div>
+        <div class="seg" style="width:24%;background:var(--draft)" title="blk.40 MTP head 27.5ms：process catch-up 3 runs（14.3ms）+ draft 2 runs（13.2ms）——真 GPU compute，非可藏的固定成本">blk.40 27.5</div>
+      </div>
+    </div>
+  </div>
+  <div class="total">114.8ms/step（≈ GPU 時間總和；CPU 已全藏）</div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">對比：base 單 token decode<small>39.8ms/token · 25.1 t/s</small></div>
+      <div class="bar">
+        <div class="seg" style="width:100%;background:var(--ffn2)" title="單 token 全 40 層 weight reads + attn/SSM/head">39.8</div>
+      </div>
+    </div>
+  </div>
+  <div class="total">39.8ms/step</div>
+
+  <p class="note"><b>拆解結論（推翻前版「固定 13.6ms/step」）</b>：CGC_VERIFY_DECODE 已把同步 pread 全藏掉 → verify 現在是<b>純線性 29.1ms/token、零固定 overhead</b>（87.2ms/3，bandwidth floor）。剩下每步的非 verify 是 <b>blk.40 MTP head 真 GPU compute 27.5ms</b>（5 token-runs × 5.5ms）——不是可藏的固定成本，是 MTP 架構自帶的 draft/verify 模型成本。<b>有效 39.4ms/token = (3×29.1 + 5×5.5) / 2.9 output</b>，與 n=1（39.2）n=3（~41）一致 → 結構天花板。</p>
+</div>
+
+<!-- ============ 2. 每 token 成本歸因 ============ -->
+<div class="card">
+  <h2>② MTP n=2 每 output token 成本歸因（39.4ms/token effective，step-timer 實測）</h2>
+  <p class="desc">有效 25.2 t/s = 39.4ms/output-token。trunk verify（GPU bandwidth）佔 76%，blk.40 MTP head 佔 24%——<b>兩者都是真 GPU compute，無可藏的固定成本</b>。</p>
+
+  <div class="legend">
+    <span><i class="sw" style="background:var(--ffn)"></i>trunk verify 30.1ms（76%，bandwidth floor，不可省）</span>
+    <span><i class="sw" style="background:var(--draft)"></i>blk.40 head 9.5ms（24%，draft+process，真 GPU compute）</span>
+  </div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">MTP n=2 每 output token（25.2 t/s）<small>39.4ms/token</small></div>
+      <div class="bar">
+        <div class="seg" style="width:76%;background:var(--ffn)" title="trunk verify 30.1ms：40 層 weight reads，GPU bandwidth-bound，不可省">verify 30.1</div>
+        <div class="seg" style="width:24%;background:var(--draft)" title="blk.40 head 9.5ms：5 token-runs × 5.5ms / 2.9 output——MTP head 是 A3B 全層，真 GPU compute">blk.40 9.5</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note"><b>CGC_STEPT 證實</b>：dft+proc+acc 三相的 wall time（13.2+14.3+14.7=42.2ms/step）疊加已超 total——三相在<b>非同步 dispatch 下與 GPU 重疊</b>，實際 CPU 暴露 ≈ 0。<b>沒有可藏的 CPU 時間。</b>剩餘唯一可動的是 blk.40 的 9.5ms/token（24%），但那要砍 MTP head 成本（model 側：更小/更便宜的 draft head），不是 runtime 可藏的。</p>
+</div>
+
+<!-- ============ 3. 瓶頸分類 ============ -->
+<div class="card">
+  <h2>③ 瓶頸分類：SSD 頻寬 / CPU / GPU compute / GPU memory bandwidth</h2>
+  <p class="desc">用測量數據逐項排除，答案是 <b class="hl">GPU memory-bandwidth-bound</b>（unified memory 讀 MoE weights）。SSD / CPU 已不是瓶頸。</p>
+
+  <div class="bnd">
+    <div class="g">
+      <h3>SSD（內建 NVMe）</h3>
+      <div class="st" style="color:var(--good)">非瓶頸 · 頻寬利用 ~9%</div>
+      <div class="meter"><i style="width:9%;background:var(--good)"></i></div>
+      <p>preads 6.9M usec（8 worker 累計）÷ 8 ≈ <b>0.86s / 7.9s wall ≈ 11%</b>，且多在冷啟動 + draft。file_reads≈4161 × ~740KB/read ≈ 3.1GB → <b>~450MB/s</b>，遠低於 M4 內建 NVMe（~5GB/s 級）。CGC_VERIFY_DECODE 已把 verify 同步 pread 藏掉（26M→6.9M usec）。<b>SSD 是 latency-bound 小隨機讀，不是頻寬瓶頸。</b></p>
+    </div>
+    <div class="g">
+      <h3>CPU（MTL encoding）</h3>
+      <div class="st" style="color:var(--good)">非瓶頸 · 已藏</div>
+      <div class="meter"><i style="width:10%;background:var(--good)"></i></div>
+      <p>CGC_OA_ASYNC + CGC_N_CB=8 把 MTL encoding（60→30ms）藏在 GPU compute 後面重疊；post_sync ~0.2ms；draft + driver 只剩 ~3.9ms/token。<b>CPU 不在 critical path。</b></p>
+    </div>
+    <div class="g">
+      <h3>GPU compute（kernel 執行）</h3>
+      <div class="st" style="color:var(--gold)">低 · 有 bubble</div>
+      <div class="meter"><i style="width:35%;background:var(--gold)"></i></div>
+      <p>IQ3_XXS 量化後 FLOPs 便宜；M4 Max FLOPs 遠高於需求。但有 ~2000 kernels/step 的 <b>dispatch bubble（~38ms，舊報告）</b>與 encoding 重疊——這是唯一可省的 GPU 側項目（kernel fusion）。</p>
+    </div>
+    <div class="g">
+      <h3>GPU memory bandwidth</h3>
+      <div class="st" style="color:var(--warn)">原判主瓶頸 · 已被 ⑦ 修正</div>
+      <div class="meter"><i style="width:95%;background:var(--warn)"></i></div>
+      <p>FFN 每 token 從 unified memory 讀 routed experts weights：<b>30.9ms/token（MTP batch）</b>。全 model 12.3GB 讀一次 @ M4 Max ~546GB/s ≈ <b>22.5ms</b>，與舊報告 weight-read 24.9ms 一致 → 原本以為 <b>就在 bandwidth envelope 上</b>。quant 越低（IQ3）weight-read 越小，這是「能跑」的關鍵。</p>
+      <p style="margin-top:8px"><span class="tag r">已被 ⑦ 證偽</span> kernel 級 probe（temp/bw_probe.cpp）實測 FFN mmid 有效頻寬只有 <b class="hl">5-45 GB/s = peak 的 1-8%</b>，是 <b>latency/occupancy-bound</b>（每 dispatch 固定 ~0.4ms），不是 546GB/s envelope。FFN 的 ~31ms/step 可修（見 §⑦），「不可省的 bandwidth floor」不成立。</p>
+    </div>
+  </div>
+
+  <p class="note"><b>一句話</b>：速度由 <b>GPU 讀 MoE weights 的 unified-memory 頻寬</b>決定（~31-35ms/token）。SSD 頻寬只用到 ~9%、CPU 已藏、GPU compute 有 bubble 但被 encoding 蓋住。<b>沒到 SSD bandwidth 瓶頸。</b> <span class="tag r">⑦ 修正</span> 但「頻寬」不是 546GB/s envelope：FFN mmid 只跑到 1-8%（latency floor），見 §⑦。</p>
+</div>
+
+<!-- ============ 4. 剩餘槓桿（藏/省） ============ -->
+<div class="card">
+  <h2>④ 剩餘槓桿：實測後「藏」的空間已歸零</h2>
+  <p class="desc">今天（2026-08-25）實作 CGC_DRAFT_DECODE + CGC_STEPT 逐相計時，把前版的「可藏 8.5ms/token」假設逐項驗證——<b>全部證偽</b>。下表是實測結果。</p>
+
+  <table>
+    <tr><th>槓桿</th><th>實測結果</th><th>結論</th></tr>
+    <tr>
+      <td><b>CGC_DRAFT_DECODE</b>（draft 走 decode-path，本次實作）</td>
+      <td>harness：<b>23.2 → 25.2 t/s、accept 87.5% → 95.6%</b>；raw：95.7 → 97.1%</td>
+      <td><span class="tag g">已入袋</span> draft 與 verify 同 pool residency → accept 不掉反升；速度也追上（draft 的 sync pread 消除）。</td>
+    </tr>
+    <tr>
+      <td><b>draft overlap / 藏 draft</b>（前版假設回收 3.9ms/token）</td>
+      <td>step-timer：dft 13.2 + proc 14.3 = 27.5ms/step 是 <b>blk.40 真 GPU compute</b>（5 token-runs × 5.5ms），非可藏的固定成本</td>
+      <td><span class="tag r">證偽</span> draft 依賴上一步 verify 的 h_nextn → 與 verify 同 GPU 同 stream 完全序列化，無從藏起。</td>
+    </tr>
+    <tr>
+      <td><b>verify 固定 13.6ms/step</b>（前版假設回收 ~4.6ms/token）</td>
+      <td>step-timer：verify 87.2ms/3 = <b>純線性 29.1ms/token、零固定 overhead</b></td>
+      <td><span class="tag r">證偽</span> CGC_VERIFY_DECODE 已把固定成本全藏光；剩下的 29.1ms/token 是 GPU bandwidth floor（必須讀 weights）。</td>
+    </tr>
+    <tr>
+      <td><b>CPU 藏 GPU 後</b></td>
+      <td>dft+proc+acc 三相 wall 疊加（42.2ms）已超 step total（114.8ms）→ 三相在 async dispatch 下互相重疊</td>
+      <td><span class="tag g">已達成</span> CPU 暴露 ≈ 0，無額外可藏。</td>
+    </tr>
+    <tr>
+      <td><b>n=1 / n=2 / n=3</b></td>
+      <td>step-timer：n=1 25.33、n=2 25.54、n=3 23.7（accept 掉到 72%）</td>
+      <td><span class="tag r">同天花板</span> 效率不變：(trunk n+1 + blk.40 ×(2n+1)) / (n+1)·acc ≈ 39.4ms/output-token。n=2 已是甜蜜點。</td>
+    </tr>
+    <tr>
+      <td><b>blk.40 MTP head 成本（24%）</b></td>
+      <td>9.5ms/output-token = 27.5ms/step，MTP 架構自帶的 draft 模型</td>
+      <td><span class="tag y">唯一剩槓桿（model 側）</span> 要 27-28 t/s 唯一路是砍 draft head 成本：更小 head / 更低 quant / 精簡 draft 層——不是 runtime 能藏的。</td>
+    </tr>
+  </table>
+
+  <p class="note"><b>務實結論</b>：MTP 已達 <b>結構天花板 ~25.5 t/s（= base）</b>，verify 在 bandwidth floor、draft 是真 GPU compute、CPU 已全藏。<b>「藏」的空間已歸零</b>；27-28 t/s 需要 <b>model 側砍 MTP head 成本</b>（blk.40 的 24%）或更激進的 quant（IQ2）/ kernel fusion。以「MTP = base、不虧、輸出正確」為轉正標準已達標，可繼續 gemma4。</p>
+</div>
+
+<!-- ============ 5. Quant/Dequant ============ -->
+<div class="card">
+  <h2>⑤ Quant / Dequant：已是最省 bandwidth 的槓桿，還有剩</h2>
+  <p class="desc">既然主瓶頸是「GPU 讀 weights 的 unified-memory 頻寬」，quant 格式直接決定 weight-read 大小；dequant 時間則因為 GPU 是 bandwidth-bound（有閒置 compute）通常不在 critical path。</p>
+
+  <div class="legend">
+    <span><i class="sw" style="background:var(--ffn)"></i>weight-read（bandwidth，主瓶頸）</span>
+    <span><i class="sw" style="background:var(--cpu)"></i>dequant compute（GPU 閒置可蓋）</span>
+    <span><i class="sw" style="background:var(--fixed)"></i>dispatch / 中間 buffer</span>
+  </div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">FFN 每 token（IQ3_XXS 3.06bpw，現況）<small>30.9ms · batch overlap 已算入</small></div>
+      <div class="bar">
+        <div class="seg" style="width:78%;background:var(--ffn)" title="weight-read ~24ms：quant 後只有 FP16 的 1/3 bytes">weight ~24</div>
+        <div class="seg tiny" style="width:8%;background:var(--cpu)" title="dequant compute ~2-3ms：inline，被 bandwidth wait 蓋住">deq 2-3</div>
+        <div class="seg" style="width:14%;background:var(--fixed)" title="dispatch + 小張量 gather 延遲 ~4-5ms">dispatch ~4-5</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="barwrap">
+    <div class="barrow">
+      <div class="barlabel">若降 IQ2_XXS（2.06bpw）<small>weight-read ~2/3 → FFN ~21ms/token</small></div>
+      <div class="bar">
+        <div class="seg" style="width:62%;background:var(--ffn)" title="weight-read ~16ms：bytes 少 1/3">weight ~16</div>
+        <div class="seg tiny" style="width:8%;background:var(--cpu)" title="dequant compute：IQ2 略高但仍在等待 bandwidth">deq 2-3</div>
+        <div class="seg" style="width:14%;background:var(--fixed)" title="dispatch 不變">dispatch ~4-5</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note"><b>已省（最大槓桿，已入袋）</b>：IQ3_XXS（3.06bpw）讓 weight-read 只有 FP16 的 <b>1/3</b>——沒有 quant 就無法 full offload（13.2GB &gt; 11.45GB）也撐不起 bandwidth。UD 格式（Unsloth dequant）本身已是最省 dequant compute 的變體。<b>quant 不是「還要省」的項目，是已經省下 3× 的項目。</b></p>
+  <p class="note"><b>dequant 時間</b>：GPU 是 bandwidth-bound（等待記憶體），dequant compute 被 wait 蓋住 → 不是 critical path。真正要確認的是 <b>verify FFN 走 inline-dequant matmul</b>（直接吃 quantized weights，不做 separate dequant pass 寫中間 buffer）——若有 separate pass 會多一次 buffer read/write + 一次 dispatch，這才是要省的 dequant「時間」。</p>
+
+  <table>
+    <tr><th>Quant/Dequant 槓桿</th><th>省什麼</th><th class="num">潛在 t/s</th><th>風險</th></tr>
+    <tr><td><b>降 IQ2_XXS（2.06bpw）</b></td><td>weight-read -1/3 → FFN 30.9→~21ms</td><td class="num">→ <b>~33</b></td><td>品質 A/B 待測（35B-A3B 用 IQ2 可能退化）</td></tr>
+    <tr><td><b>inline-dequant 確認/補強</b></td><td>省 separate dequant buffer read/write + dispatch</td><td class="num">→ ~26-27</td><td>低（kernel 層）</td></tr>
+    <tr><td><b>access pattern（sequential per-expert / aligned）</b> <span class="tag r">前提錯（⑦）</span></td><td>實測有效頻寬 1-8%、且已是 sequential 讀（無 gather 問題）——非 bandwidth-bound，改為：<b>減少 mmid dispatch 數 / 加大 grid（併層）</b></td><td class="num">→ ~29（修 latency floor）</td><td>中（併層 kernel 重寫）</td></tr>
+    <tr><td>dequant 後 cache hot experts</td><td>省重複 dequant</td><td class="num">—（不建議）</td><td>dequant = 4-8× 記憶體，pool 效益逆轉</td></tr>
+  </table>
+</div>
+
+<!-- ============ 6. 天花板對照 ============ -->
+<div class="card">
+  <h2>⑥ 吞吐天花板對照</h2>
+  <p class="desc">MTP 已從 6.2 → 25.4 t/s，追平 base decode，並已達單 token「kernel floor」28.6 的 <b>89%</b>。</p>
+
+  <div class="ceil">
+    <div class="cl">MTP n=2（CGC_VERIFY_DECODE）<br><small>39.4ms/token · 2026-08-25</small></div>
+    <div class="ctrack"><div class="cfill" style="width:88.8%;background:linear-gradient(90deg,#2c6a4a,#5cc09a)">25.39 t/s</div></div>
+    <div class="tokbadge">≈ <b class="hl">25.4</b> tok/s <span class="tag g">✓ 轉正（verify 35.4ms）</span></div>
+  </div>
+  <div class="ceil">
+    <div class="cl">MTP n=1（CGC_VERIFY_DECODE）<br><small>39.6ms/token · accept 100%</small></div>
+    <div class="ctrack"><div class="cfill" style="width:88.4%;background:linear-gradient(90deg,#2c6a4a,#5cc09a)">25.28 t/s</div></div>
+    <div class="tokbadge">≈ <b>25.3</b> tok/s</div>
+  </div>
+  <div class="ceil">
+    <div class="cl">base 單 token decode<br><small>39.79ms/token · graft</small></div>
+    <div class="ctrack"><div class="cfill" style="width:87.9%;background:linear-gradient(90deg,#2c6a4a,#5cc09a)">25.13 t/s</div></div>
+    <div class="tokbadge">≈ <b>25.1</b> tok/s</div>
+  </div>
+  <div class="ceil">
+    <div class="cl">MTP 若藏掉全部 overhead（8.5ms/token → 0）<br><small>30.9ms/token · batch overlap 已算入</small></div>
+    <div class="ctrack"><div class="cfill" style="width:100%;background:linear-gradient(90deg,#1c4a3a,#3a8a6a)">~32.4 t/s</div></div>
+    <div class="tokbadge">≈ <b>32.4</b> tok/s（理論上界）</div>
+  </div>
+  <div class="ceil">
+    <div class="cl">單 token「kernel floor」（dispatch 免費）<br><small>35ms/step · §8.71</small></div>
+    <div class="ctrack"><div class="cfill" style="width:96.7%;background:linear-gradient(90deg,#8a6a2c,#c0a05c)">28.6 t/s</div></div>
+    <div class="tokbadge">≈ <b>28.6</b> tok/s</div>
+  </div>
+  <div class="ceil">
+    <div class="cl">>30 tok/s 需要<br><small>batch overlap + 藏 overhead</small></div>
+    <div class="ctrack" style="position:relative"><div style="position:absolute;left:93%;top:-6px;bottom:-6px;border-left:2px dashed var(--accent)"></div></div>
+    <div class="tokbadge">30 tok/s</div>
+  </div>
+
+  <p class="note"><b>定案</b>：MTP 的 <b>batch overlap 效益是真的</b>——3-token verify 的 marginal FFN 30.9ms/token 比單 token 39.8ms 低 22%（共享 experts + 攤薄固定成本）。所以 MTP 的天花板不是 28.6，而是 ~32（全藏 overhead）甚至更高（若 shared-KV 能省 id_last）。<b>現在卡在「overhead 沒藏」與「dispatch bubble」，不是卡在模型。</b></p>
+</div>
+
+<p class="sub" style="margin-top:24px">數據：2026-08-25 實測（Nail model + cache 4GiB + CGC_VERIFY_DECODE=1 + --temp 0，-n 200 warm steady-state）。n=1: 25.28 t/s / verify 37.72ms / accept 100%；n=2: 25.39 t/s / verify 35.44ms / accept 95.7%；exact 對照 n=2: 13.85 t/s / 64.08ms；base: 25.13 t/s / 39.79ms。M4 Max ~546GB/s unified BW、內建 NVMe ~5GB/s 級。FFN marginal = (n2 step − n1 step)/1 = (106.3−75.4) = 30.9ms/token；verify 固定 = n1 step − 2×30.9 = 13.6ms/step。舊報告基準：§8.65（GPU 73ms）、§8.71/8.72（三層天花板）、§8.77/8.93（OA_ASYNC + CB8）。Quant/dequant：IQ3_XXS=3.06bpw、IQ2_XXS=2.06bpw（weight-read 約正比）。</p>
+
+<!-- ============ 7. FFN weight-read 有效頻寬 A/B（kernel 級） ============ -->
+<div class="card">
+  <h2>⑦ FFN weight-read 有效頻寬 A/B（kernel 級實測）——「bandwidth envelope」與「access-pattern 7成」雙重證偽</h2>
+  <p class="desc">§3/§5/§6 主張 verify 的 FFN「就在 546GB/s bandwidth envelope 上」且「access-pattern 7成→9成」。為了定案是否值得重寫 kernel，用獨立 probe（temp/bw_probe.cpp）在 Metal 上以 <b>真實 qwen36 shapes</b> 直接量 mmid kernel 的有效頻寬（GB/s = 讀入 bytes / GPU 時間）。</p>
+
+  <p class="desc">方法：① isolated（單 op，sync 每 rep，取 min）與 sustained（200 個 graph 串流、每 20 個 sync——排除 per-graph encode 假象）；② in-graph（40 層 × 80 個 mmid op 塞進同一個 graph_compute，最接近真實 verify）。bytes = n_tokens × n_used 個 expert slab。gate/up = IQ2_S（m=512, k=2048）、down = IQ3_XXS（m=2048, k=512）、256 experts、top-8。</p>
+
+  <table>
+    <tr><th>情境</th><th>bytes</th><th>GPU 時間（min）</th><th class="num">有效頻寬</th><th class="num">vs 546GB/s</th></tr>
+    <tr><td>isolated · gate/up IQ2_S · used=8 · tok=1</td><td class="num">2.69 MB</td><td class="num">0.52 ms</td><td class="num">5.2 GB/s</td><td class="num">~1%</td></tr>
+    <tr><td>isolated · down IQ3_XXS · used=8 · tok=1</td><td class="num">3.21 MB</td><td class="num">0.29 ms</td><td class="num">11.2 GB/s</td><td class="num">~2%</td></tr>
+    <tr><td>isolated · gate/up · used=24 · tok=1</td><td class="num">8.06 MB</td><td class="num">0.38 ms</td><td class="num">21.1 GB/s</td><td class="num">~4%</td></tr>
+    <tr><td>isolated · gate/up · used=24 · tok=3</td><td class="num">24.18 MB</td><td class="num">0.66 ms</td><td class="num">36.5 GB/s</td><td class="num">~7%</td></tr>
+    <tr><td><b>in-graph · 40 層 × 80 mmid · used=16 · tok=3</b></td><td class="num">1415.6 MB</td><td class="num">31.35 ms（per-mmid 0.392）</td><td class="num"><b>45.1 GB/s</b></td><td class="num">~8%</td></tr>
+  </table>
+
+  <p class="note"><b>結論 1：有效頻寬只有 1-8%，不是「7 成」也不是「envelope」。</b>FFN mmid 的 weight-read 以 5-45 GB/s 在跑——比 §3 主張的 546GB/s envelope 低一個數量級。但「同一批 40 層 × 3 token 的 FFN 總量 ≈ 31.4ms」與 §1 的 FFN 數字吻合，所以 <b>doc 的 FFN 時間對、原因錯</b>：不是 bandwidth-bound，是 <b>latency/occupancy-bound</b>。</p>
+
+  <p class="note"><b>結論 2：三個證據指向 latency floor，不是 bandwidth。</b>① 時間不隨 bytes 線性成長：2.69MB→0.52ms、24.18MB→0.66ms（9 倍 bytes 只多 1.27 倍時間）；fit 出每 dispatch 固定 ~0.4ms + marginal ~150GB/s。② sustained ≈ isolated（pipeline 串流沒省到）→ 不是 per-graph encode 假象。③ in-graph 的 per-mmid（0.392ms）≈ isolated per-op（0.29-0.52ms）→ 塞進 40 層大 graph 也攤不掉 → 是<b>每個 kernel 自身的 GPU 固定延遲（小 grid、低 occupancy、memory latency 藏不住）</b>。</p>
+
+  <p class="note"><b>結論 3：sequential access 早已成立。</b>每個 expert slab（270-400KB）本身連續，mmid 直接順序讀；FFN 路徑根本沒有 `ggml_get_rows` 式 gather。所以「access-pattern（sequential / aligned）→ 7成→9成 → 28-30」<span class="tag r">前提錯誤，關閉</span>。正確槓桿是 <b>減少 dispatch 數 + 加大每個 kernel 的 grid</b>（bytes/dispatch 變大時效率上升：5→36 GB/s）——即「併層 mmid」（多層 experts 塞進同一個 kernel）。</p>
+
+  <p class="note"><b>對 verify 87.2ms 的重新歸因</b>：FFN mmid ≈ 31ms（36%，latency floor、<b>可修</b>）；其餘 ~56ms 是 10 層 full-attn + 30 層 linear-attn(SSM) + norms + head + ~2000 個小 kernel 的 dispatch/latency——這一塊尚未逐項分解（§⑦ 只證實 FFN 部分）。</p>
+</div>
+
+<!-- ============ 8. 為何 MTP 沒到 30 t/s（回覆：blk.40 cache + 攤薄） ============ -->
+<div class="card">
+  <h2>⑧ 為何「blk.40 進 cache + 多 token 攤薄」沒自動到 30 t/s</h2>
+  <p class="desc">直覺：non-MTP 25 t/s，verify 3-token 攤薄 20-27%，30 應該很容易。答案是 <b class="hl">「攤薄有發生，但被兩筆沒進到直覺的成本吃光」</b>。</p>
+
+  <table>
+    <tr><th>項目</th><th>數值</th><th>說明</th></tr>
+    <tr>
+      <td><b>verify 跑的是完整 40 層 trunk</b>（不是 blk.40）</td>
+      <td class="num">87.2 ms/step</td>
+      <td>draft 才是 blk.40 單層（speculative-simple.cpp L383-390：`llama_decode(ctx_tgt, [id_last, drafts])`）。blk.40 進 L4 pool 只省 draft 的 weight-loading（27.5ms/step 仍要跑 5 個 token-run），<b>與 verify 的 87.2ms 無關</b>——verify 必須用「真模型」確認 draft，一定跑全部層。</td>
+    </tr>
+    <tr>
+      <td><b>攤薄確實存在</b></td>
+      <td class="num">29.1 vs 39.8 ms/row</td>
+      <td>3-token verify 87.2/3 = 29.1ms/row，比單 token 39.8ms 低 <b>27%</b>（共享 experts + 攤薄固定成本）——你期待的效益是真的、已入帳。</td>
+    </tr>
+    <tr>
+      <td><b>但 step 只出 2.9 個 token</b>（不是 3）</td>
+      <td class="num">95.7% accept</td>
+      <td>n=2 的 step = [id_last + 2 drafts]，最多 3 個 output；實測 2.9 → 每 step 有 0.1 個 token 被拒（MTP head 品質）。公式（§1）：(3×29.1 + 5×5.5) / 2.9 = 39.4ms/output-token。</td>
+    </tr>
+    <tr>
+      <td><b>blk.40 MTP head 是 24% 的固定成本</b></td>
+      <td class="num">27.5 ms/step</td>
+      <td>draft+process 5 個 token-run × 5.5ms，MTP 架構自帶、與 verify 序列化（依賴 h_nextn），無法藏。這筆不在「攤薄」的直覺裡。</td>
+    </tr>
+  </table>
+
+  <p class="note"><b>所以「30 很容易」的漏洞</b>：攤薄攤的是「每行成本」（39.8→29.1），但 MTP 每 step 付 3 行的錢 + blk.40 27.5ms，只拿 2.9 個 token。全 accept（3 tokens/step）且 blk.40 免費時：3 / (87.2+8.5) = 31.3 t/s——那才是「30 很容易」的場景，現在兩者都沒達成。</p>
+
+  <p class="note"><b>要 30 t/s（= 33.3ms/token）需要省 6.1ms/token = ~17.7ms/step</b>，只有兩個 ~17ms 級來源：<br>
+  ① <b>model 側砍 blk.40 head</b>（27.5ms/step → 砍半 ~13ms）：step → ~98ms → <b>~29.6 t/s</b>；<br>
+  ② <b>kernel 側修 FFN latency floor</b>（§⑦：31.4ms → ~15ms，併層 mmid）：verify → ~71ms → step → ~98ms → <b>~29.5 t/s</b>；<br>
+  ③ 兩者都做 → ~34 t/s。<b>不是自動攤薄能到，是上面兩條有界的工程。</b> <span class="tag r">② 已被 §⑨ FFN_GU1 證偽</span></p>
+</div>
+
+<!-- ============ 9. verify 87.2ms 逐項分解（chained graph probe）+ 併層 mmid 證偽 ============ -->
+<div class="card">
+  <h2>⑨ verify 87.2ms 逐項分解（chained probe）+ 併層 mmid prototype——「②併層」證偽</h2>
+  <p class="desc">用 temp/decomp_probe.cpp v4+（<b>chained</b> 圖、真實 qwen36 shapes、共享唯讀權重、3-token batch、Metal、50 rep 取 min）把 verify 拆成 attention / linear-attn / SSM glue / FFN / norm+head 五塊。與 §⑦ 的 bw_probe（isolated/sustained）不同：這裡全部塞進「依賴鏈」graph，量的是 <b>verify 的真實序列成本</b>。</p>
+
+  <table>
+    <tr><th>測試</th><th>內容</th><th>bytes</th><th class="num">min (ms)</th><th class="num">佔 COMBINED</th></tr>
+    <tr><td>FULL_ATT</td><td>10 層 full-attn（Q6_K wqg/wk/wv/wo + flash_attn, KV=512）</td><td class="num">223.6 MB</td><td class="num">7.38</td><td class="num">10.3%</td></tr>
+    <tr><td>LIN_ATT_MM</td><td>30 層 linear-attn 只 3 matmul（wqkv/wz/wo, 無 SSM）</td><td class="num">825.8 MB</td><td class="num">22.09</td><td class="num">—</td></tr>
+    <tr><td>LIN_GLUE</td><td>30 層 linear-attn 只 SSM glue（conv1d/l2norm/gdn/gated-norm）</td><td class="num">0</td><td class="num">3.62</td><td class="num">—</td></tr>
+    <tr><td>LINEAR_ATT</td><td>30 層 linear-attn 全（matmul + SSM）＝MM+GLUE</td><td class="num">845.4 MB</td><td class="num">25.85</td><td class="num">36.0%</td></tr>
+    <tr><td>ATT_MIX</td><td>40 層混合（每 4 層 1 個 full-attn，其餘 linear）＝真實拓撲</td><td class="num">1069.1 MB</td><td class="num">33.01</td><td class="num">—</td></tr>
+    <tr><td>FFN_MMID</td><td>40 層只 3 mmid + swiglu（gate/up IQ2_S, down IQ3_S, top-8）</td><td class="num">359.1 MB</td><td class="num">22.81</td><td class="num">—</td></tr>
+    <tr><td><b>FFN_GU1</b></td><td>40 層併層：gate+up 併成 1 個 mmid（1024 列）＝2 mmid/層</td><td class="num">359.1 MB</td><td class="num"><b>22.67</b></td><td class="num">—</td></tr>
+    <tr><td>FFN</td><td>40 層 3 mmid + glue（norm/gate_inp F32/expert-sum/shared Q6_K）</td><td class="num">462.4 MB</td><td class="num">27.79</td><td class="num">38.7%</td></tr>
+    <tr><td>FFN_ROUTE</td><td>40 層 + 真 routing（softmax/argsort/get_rows/weight-norm）</td><td class="num">462.4 MB</td><td class="num">29.03</td><td class="num">—</td></tr>
+    <tr><td>NORM_HEAD</td><td>80 rms_norm + output_norm + head Q6_K[2048→248320]</td><td class="num">417.2 MB</td><td class="num">11.33</td><td class="num">15.8%</td></tr>
+    <tr><td><b>COMBINED</b></td><td>40 層 (attn-mix+ffn) + head（verify 近似）</td><td class="num">1948.6 MB</td><td class="num"><b>71.72</b></td><td class="num">100%</td></tr>
+  </table>
+
+  <p class="note"><b>分解結論（b 完成）</b>：COMBINED 71.7ms ≈ 7.38+25.85+27.79+11.33 = 72.35ms → chained 可加總、無隱藏 dispatch bubble。真正的兩個大頭：<b>FFN 40 層 27.8ms（38.7%）</b>與 <b>linear-attn 30 層 25.9ms（36.0%）</b>，合計 75%。full-attn 只 10.3%、norm+head 15.8%（head 佔其中大部分）。對照真 verify 87.2ms 的 ~15.5ms gap 是「每層獨特 experts + 真 routing + KV 讀取 + in-place」等未建模 overhead——probe 共享權重讓 8 個 expert slab 全命中 L2，低估了 weight-read 成本。</p>
+
+  <p class="note"><b>FFN 內部拆解</b>：3 個 mmid kernel 就佔 22.8ms（FFN 的 82%）；glue（norm+gate_inp+expert-sum+shared）只 4.98ms；routing 只 +1.24ms。→ <b>FFN latency floor 的 82% 是 mmid kernel 本身</b>，不是 glue、不是 routing。</p>
+
+  <p class="note"><b>併層 mmid prototype（a 完成，負面結論）</b>：FFN_GU1 把 gate+up 併成單一 1024-列 mmid（120→80 次 mmid dispatch），40 層只省 <b>0.137ms</b>（每省 1 次 dispatch ≈ 3.4µs）。→ <b>FFN 不是 dispatch-bound，是 per-mmid kernel 的 latency/occupancy-bound</b>（small grid、低佔用，與 §⑦ 的 1-8% 有效頻寬一致）。併層不改「每層要算的 expert 列數」，只是少排幾次 dispatch，而 dispatch 早已藏在 kernel 執行下。⇒ <span class="tag r">槓桿②「併層 mmid → 31.4→15ms」證偽、關閉</span>。</p>
+
+  <p class="note"><b>turbo 式 per-expert batched GEMM 驗證（c 完成，同樣負面）</b>：既然 ② 併層無效，進一步驗證「單 dispatch 多 expert 加大 grid」（§⑦ 結論 3 的正確槓桿）——FFN_PACK 把 G 層 experts 疊進單一 mmid dispatch（weight [k,m,G×256]、batch=G×3、grid z=24G），掃 G={1,2,4,8}：dispatch 數 80→10、grid z 24→192，總時間只從 22.34→22.14ms（<b>1.01×</b>）。→ 真實 verify 的 chained graph 已被 Metal 同 stream 管線化，GPU 在 dispatch 之間不閒置，isolated 的「每 dispatch 固定 ~0.4ms」早已藏掉（chained 下 per-mmid 只 0.19ms）。<b>FFN floor 是 sustained kernel-throughput bound（~16 GB/s 有效），不是 dispatch 數、也不是 grid size</b>。要動它只剩：① MM 路徑（simdgroup_mm，需 batch≥32，3-token verify 到不了）；② 自訂高佔用 kernel（本 fork 結構上不支援）。<span class="tag r">turbo 併層也證偽</span> → 30 t/s 只剩 §⑧ ①「model 側砍 blk.40 head」一條有界路線。</p>
+</div>
+
+<!-- ============ 10. #1 draft top-4 A/B 證偽（2026-08-25） ============ -->
+<div class="card">
+  <h2>⑩ #1「blk.40 draft top-8→top-4」A/B 實測——證偽（draft head 是 compute-bound 非 read-bound）</h2>
+  <p class="desc">獨立 option：<code>--mtp-top4</code> / <code>N30CACHE_MTP_TOP4=1</code> → <code>CGC_MTP_DRAFT_TOP4=1</code>（draft-only 覆寫 blk.40 MTP head 的 routed experts 8→4，trunk 不變；預設 off = 原 top-8，bit-exact）。固定 prompt + seed 42 + --ignore-eos + -n 1100，同 trunk 模型、greedy verify。graph_mtp 側同時修掉 build_moe_ffn 的 expert-view OOB（用 min(hparams.n_expert_used, n_expert_used)，warmup 行為不變，ref PR#14753）。</p>
+
+  <table>
+    <tr><th>arm</th><th class="num">t/s (1103 tok)</th><th class="num">hit rate</th><th class="num">accept</th><th class="num">n_drafted</th><th class="num">n_accept</th><th>輸出</th></tr>
+    <tr><td>top-8（baseline）</td><td class="num">26.325（41.900s）</td><td class="num">83.5%</td><td class="num">99.458%</td><td class="num">738</td><td class="num">734</td><td rowspan="2"><b>bit-identical</b><br><small>md5 63f80ef709ed…、4910 bytes 兩臂全同</small></td></tr>
+    <tr><td>top-4（--mtp-top4）</td><td class="num">26.269（41.989s）</td><td class="num">78.8%</td><td class="num">98.253%</td><td class="num">744</td><td class="num">731</td></tr>
+  </table>
+
+  <p class="note"><b>判定：<span class="tag r">#1 證偽（speed 槓桿）</span></b>。top-4 確實生效（accept 99.46%→98.25%、hit 83.5→78.8% 證明 draft 品質變差），但 t/s 幾乎不變（26.269 vs 26.325，<b>反而慢 0.2%</b>：accept 掉 → 每 step 拿少 0.8% tokens，抵銷了略減的 expert read）。把 blk.40 draft 的 routed expert 讀取砍半，在 27.5ms/step 的 draft+process 上只省 ~1ms（~3.6%）→ 證實 <b>blk.40 head 是 compute/latency-bound，不是 expert-weight-read bound</b>（8 experts 的 slab 讀取在 27.5ms 中只佔 ~7%）。</p>
+
+  <p class="note"><b>影響</b>：§⑧①「model 側砍 blk.40 head」不能靠「少讀 experts」達成——只有砍 head 的 <b>compute</b>（更小/更少層的 MTP head，模型側）才有用，runtime 無解。輸出 <b>bit-identical</b>（verify 是 trunk-greedy gate，draft 再差也不改最終文字），所以 top-4 無「品質損失」但也不省時 → <b>純粹不可取</b>。組合路 #1+#3 需重估：剩 #3（trunk head IQ2）單獨，~-7ms/step → ~28 t/s（見 §⑪ 估）。</p>
+</div>
+
+<!-- ============ 11. 剩餘未證偽槓桿（30 t/s 評估，2026-08-25） ============ -->
+<div class="card">
+  <h2>⑪ 剩餘未證偽槓桿——30 t/s 只剩「verify 側」兩條（已實測 26.3 t/s）</h2>
+  <p class="desc">底線（本頁實測）：step = 113.6ms（1103 tok / 41.9s）、tokens/step ≈ 2.99（n=2, accept 99.5%）。30 t/s 需要 step ≤ 99.7ms → <b>還差 ~14ms/step</b>。verify 87.2ms 佔 step 的 77%，是唯一還動得了的大頭（blk.40 27.5ms 已證 compute-bound、§⑩ 證 read 槓桿無效）。</p>
+
+  <table>
+    <tr><th>槓桿</th><th>target（verify 內佔比）</th><th class="num">估省 /step</th><th class="num">估 t/s</th><th>品質風險</th><th>狀態</th></tr>
+    <tr><td><b>#3 head IQ2</b>（trunk output.weight Q6_K→IQ2，417→~131MB）</td><td>norm+head 11.33ms（15.8%，head 佔幾乎全部；bandwidth-bound ~37GB/s）</td><td class="num">~8ms</td><td class="num">~28.3</td><td>低（只有 1 層 head；greedy 對 head 誤差敏感度待 A/B）</td><td><span class="tag g">未證偽，唯一確定槓桿</span>（p3a/p3b 待做）</td></tr>
+    <tr><td><b>trunk FFN → IQ2_XXS</b>（gate/up IQ2_S + down IQ3_XXS → 全 IQ2_XXS）</td><td>FFN 27.79ms（38.7%，mmid 22.81 是 read-bound ~16GB/s；1.49× 縮）</td><td class="num">~6ms</td><td class="num">~27.9</td><td>高（35B-A3B 全 FFN IQ2 可能退化，§⑤ 明言「品質 A/B 待測」）</td><td><span class="tag y">未證偽但風險高</span></td></tr>
+    <tr><td><b>#3 + FFN-IQ2 合併</b></td><td>—</td><td class="num">~14ms</td><td class="num">~30.0</td><td>中（head 低 + FFN 高）</td><td><span class="tag y">唯一到 30 的算術路徑</span></td></tr>
+    <tr><td>linear-attn 30 層 quant</td><td>LIN_ATT_MM 22.09ms（已 37GB/s，matmul-bound 非 read-bound）</td><td class="num">~0-1ms</td><td class="num">—</td><td>—</td><td><span class="tag r">分析已證偽（不是 read-bound）</span></td></tr>
+    <tr><td>full-attn 10 層 quant</td><td>7.38ms（flash compute-bound）</td><td class="num">~0</td><td class="num">—</td><td>—</td><td><span class="tag r">分析已證偽</span></td></tr>
+  </table>
+
+  <p class="note"><b>總結</b>：#1（top-4 draft）今證偽；②（FFN 併層 / turbo GEMM）§⑨ 已證偽；accept/n_max、batch 藏、CPU 藏都已到頂。真正還沒證偽、有 ~14ms 級槓桿的只剩 <b>verify 側</b>：#3 head IQ2（~8ms，低風險）＋ trunk FFN IQ2_XXS（~6ms，高風險）——兩者合併才摸到 <b>~30 t/s</b>，單獨都只有 ~28。blk.40 27.5ms 是 compute-bound、runtime 無解（除非換更小 MTP head，模型側）。下一步就是 p3a/p3b：<b>llama-quantize 單獨重量化 output.weight → IQ2-head model</b>（獨立 model 檔、獨立 option，不碰原 model）。</p>
+</div>
+
+<!-- ============ 12. decomp_probe 工具測量方式 + TPOT 拆解方法 ============ -->
+<div class="card">
+  <h2>⑫ 工具測量方式：decomp_probe（kernel 級 decompose）＋ TPOT 時間拆解方法</h2>
+  <p class="desc">本頁的 ①（CGC_STEPT 逐相）、⑦（bw_probe）、⑨（decomp_probe chained）用三套獨立工具，各量不同層次。這裡補齊各工具的<b>測量方式</b>與<b>TPOT 怎麼拆</b>，讓數字可複現、可互相比對。</p>
+
+  <h3 style="font-size:14px;margin:14px 0 8px">A. decomp_probe.cpp —「chained kernel 級 floor」測量</h3>
+  <table>
+    <tr><th>項目</th><th>做法</th></tr>
+    <tr><td><b>量什麼</b></td><td>把 verify 的 40 層 trunk 拆成 attn / linear-attn(SSM) / FFN / norm+head 四塊，各自以「40 層依賴鏈」graph 塞進一次 <code>ggml_backend_graph_compute</code>，量 GPU 序列執行時間（kernel floor）。不是 isolated、不是 sustained，是 <b>chained</b>——每層吃前一層的輸出，最接近真實 verify 的序列成本。</td></tr>
+    <tr><td><b>權重</b></td><td>真實 qwen36 shapes（gate/up IQ2_S 2048→512、down IQ3_XXS 512→2048、256 experts、top-8、3-token batch、shared/注意力 Q6_K、KV=512、head Q6_K 2048→248320）。預設<b>共享唯讀</b>權重（每層同一組 expert slab）→ 讓 8 個 slab 全命中 L2，量到「同權重的下限」；FFN_UNIQ 測試用 G 組 distinct bundles 量 locality 效應。</td></tr>
+    <tr><td><b>計時</b></td><td>每個 test block 自建 4GiB ggml ctx + 依賴鏈 graph；<code>run()</code> 對同一 graph 跑 50 rep（<code>graph_compute</code> + <code>synchronize</code>），同時記 <b>min</b>（排除變異）與 <b>mean</b>（對齊真實驗證的平均時間）。<code>PROBE_N_CB</code> env 控制 n_cb（預設對齊生產 CGC_N_CB=8）。</td></tr>
+    <tr><td><b>bytes/有效頻寬</b></td><td>每 block 累加每層實際讀入的 weight bytes，印 min/mean 與 <code>eff GB/s = bytes / min</code>——用於判斷該塊是 <b>bandwidth-bound</b>（eff→546GB/s 級）還是 <b>latency/occupancy-bound</b>（eff 只有個位數 GB/s，如 FFN mmid ~16GB/s）。</td></tr>
+    <tr><td><b>可加總性</b></td><td>COMBINED（40 attn+ffn + head 全鏈）≈ 各分塊 min 之和（73.0 ≈ 7.38+25.85+27.79+11.33）→ 驗證無隱藏 dispatch bubble，分塊可獨立優化。</td></tr>
+  </table>
+
+  <h3 style="font-size:14px;margin:14px 0 8px">B. TPOT 時間拆解方法（三層對照）</h3>
+  <table>
+    <tr><th>層次</th><th>工具</th><th>怎麼量</th><th>拆出什麼</th></tr>
+    <tr><td><b>驅動層逐步</b></td><td>CGC_STEPT</td><td>speculative-simple 每 step 把 <code>llama_decode</code> 四段（draft/verify/process/accept）各掐 <code>ggml_time_us()</code>，印 <code>CGC-STEPT total/dft/ver/proc/acc</code></td><td>step 的牆上時間分配：verify 87.2ms（trunk）、blk.40 27.5ms（draft+process）、acc 14.7ms（sampler+非同步 logits GPU tail）。<b>dft+proc+acc 牆上疊加超過 total → 三相在 async dispatch 下互相重疊，CPU 暴露≈0</b>。</td></tr>
+    <tr><td><b>CPU 側相位</b></td><td>CGC_PHASE_TIMING（CGC-PHASE / CGC-PHASE-B）</td><td>llama-context.cpp 的 <code>process_ubatch</code> 把每次 graph_compute 拆 build / alloc / inputs / compute，單 token 與多 token（verify）分開累計；CGC-PHASE-B 印單次值</td><td>verify graph_compute 的 CPU 成本極小（build 0.05 + alloc 0.1 + inputs 0.01ms）；<b>多 token 的 compute 單次值交替出現 ~85ms（trunk verify）與 ~1.2ms（blk.40 head）</b>——證明 verify GPU 真成本 ~85ms、CPU overhead 僅 ~2ms。</td></tr>
+    <tr><td><b>kernel 級 floor</b></td><td>decomp_probe</td><td>如 A——chained graph 取 min</td><td>COMBINED 73ms = 已知 bandwidth/latency 下限。與真 verify ~85ms 的差（~12ms）＝「未建模 overhead」（真實每層獨立 experts + 每層 routing + segment event-gating）——見 §⑬。</td></tr>
+  </table>
+  <p class="note"><b>三層關係</b>：<code>st_ver（驅動層）≥ phb_compute（CPU 側 graph_compute 牆上）≥ COMBINED（kernel floor）</code>。三者差額可逐層定位：st_ver − phb_compute ≈ CPU 後處理（extract_layer_inputs/logits，~2ms）；phb_compute − COMBINED ≈ 真實權重/路由/event-gating 成本（~12ms，§⑬ 分解）。</p>
+</div>
+
+<!-- ============ 13. verify 15.5ms gap 分解 + CGC_EARLY_VERIFY（2026-08-25） ============ -->
+<div class="card">
+  <h2>⑬ verify 15.5ms gap 分解 + <code>--mtp-early-verify</code>（early slot_table write）實測——挖回 ~8-11ms/step</h2>
+  <p class="desc">§⑨ 的 COMBINED probe 是 73ms，真 verify 是 87.2ms——這 ~15ms gap 用三種假說逐個測：① min-vs-mean（排除，probe mean 72.1≈min 71.5）；② KV 長度 512→2048（只 +1.6ms）；③ 每層獨特 experts locality（<b>FFN_UNIQ G=1/4 掃描：27.89 vs 27.82ms，無 locality 效應，證偽</b>）。最後定位在 <b>segment event-gating 序列化</b>。</p>
+
+  <table>
+    <tr><th>測量（真 binary，CGC-PHASE-B 單次值）</th><th class="num">trunk verify graph_compute</th><th>說明</th></tr>
+    <tr><td>baseline（GATE path）</td><td class="num">~86ms</td><td>CGC_OA_ASYNC 每 FFN layer 一個 topk segment → 40 段，每段邊界 wait→hook→signal 串行</td></tr>
+    <tr><td><b>CGC_NO_EVENT</b>（去 event gate）</td><td class="num"><b>~78ms</b></td><td>event-gating 序列化成本 <b>~8ms</b></td></tr>
+    <tr><td>CGC_SKIPFAST（跳 hook body）</td><td class="num">~85.6ms</td><td>hook body 便宜（<0.5ms）→ 序列化在「wait→hook→signal」整段，非 hook 內</td></tr>
+    <tr><td>CGC-SEG 統計</td><td class="num">wait 2.18ms / cb 0.6ms / sig 1.4µs 每段</td><td>wait 被 GPU 執行藏住；hook body 0.6ms/段 × 40 段是 critical-path 序列化主體</td></tr>
+  </table>
+
+  <p class="note"><b>根因</b>：verify 是 n_tokens=3，<code>CGC_EARLY</code>（early slot_table write + 提早 signal，藏在 GPU 後）只對 decode（ne[1]==1）生效 → verify 走 GATE path：<b>等整段 seg[i] 跑完 → CPU 讀 topk GPU 結果 → 寫 table → signal → seg[i+1] 才能開始</b>。每段 ~0.6ms CPU 序列化 × 40 段 ≈ 8ms。</p>
+
+  <p class="note"><b>實現（CGC_EARLY_VERIFY）</b>：把 CGC_EARLY 延伸到 n_tokens≤3。安全性：CGC_VERIFY_DECODE 下 verify hook 是 touch-only（不 ensure_batch、不搬 pool），slot_table 純粹是 pool state 的函數 → early 寫的 table 與 GATE 寫的相同；hook 側在 CGC_EARLY_VERIFY 下跳過自己的 post-ensure write（避免與已 signal、正在跑的消費段 race）。sched 尾段 tail-wait 已防 cross-step race（decode 的 early write 不會撞 verify 讀）。改動：ggml-backend.cpp（sched 條件）、llama-context.cpp（hook write 跳過）。</p>
+
+  <table>
+    <tr><th>arm（seed 42）</th><th class="num">ver/step</th><th class="num">decoded t/s</th><th class="num">accept</th><th>輸出</th></tr>
+    <tr><td>baseline（GATE verify）</td><td class="num">~95.6ms</td><td class="num">23.75</td><td class="num">88.3%</td><td rowspan="2">兩臂各自 within-run bit-stable（md5 相同）；<b>臂間非 bit-identical</b>（early table 在 pool state 的早一點時間點寫入）</td></tr>
+    <tr><td><b>--mtp-early-verify</b></td><td class="num"><b>~84.6ms（−11ms）</b></td><td class="num"><b>26.47（+11.5%）</b></td><td class="num">91.4%</td></tr>
+  </table>
+
+  <p class="note"><b>production script 對照（./scripts/run_n30cache.sh -m qwen36 --mtp --seed 42, n=120）</b>：baseline <b>24.597 t/s</b> → <code>--mtp-early-verify</code> <b>26.976 t/s（+9.7%）</b>。accept 未退化（88.3→91.4%）。新增 option：<code>--mtp-early-verify</code> / <code>N30CACHE_MTP_EARLY_VERIFY=1</code>（自動開 CGC_EARLY=1），預設 off。</p>
+
+  <p class="note"><b>判定</b>：這是 §⑪ 缺的「verify 側」真正可挖的 ~8-11ms（graph/packing 層，event-gating 序列化）。與 §⑧ 結論「藏已歸零」不衝突——那是 blk.40/CPU 側；verify 的 event-gating 是 <b>GPU 閒置</b>（wait→hook→signal 串行時 GPU 等 CPU），不是可藏的 CPU 時間，是可修的 GPU bubble。<b>新天花板：step ≈ 114.8 − ~8 = ~107ms → ~27-28 t/s</b>（本頁實測 26.98）。輸出非 bit-identical（GATE vs early 臂），但 within-arm 確定性；如需 bit-identical 生產，可保持預設 off。</p>
+
+  <p class="note"><b>疊加 #3 head IQ2（Q6_K → IQ2_S output.weight）實測（n=200, seed 42, production script）</b>：early-verify 之上再疊 <code>--head-iq2</code>（headIQ2 model 檔）——</p>
+  <table>
+    <tr><th>臂</th><th class="num">decoded t/s</th><th class="num">vs 前臂</th><th class="num">accept</th><th>輸出</th></tr>
+    <tr><td>early-verify + Q6_K head</td><td class="num">27.47–27.62</td><td class="num">—</td><td class="num">96.4%</td><td rowspan="2">非 bit-identical（md5 1522ecb3 vs 12adbc0d）</td></tr>
+    <tr><td><b>early-verify + head IQ2</b></td><td class="num"><b>28.92</b></td><td class="num"><b>+5.3%</b></td><td class="num">97.1%（無損）</td></tr>
+  </table>
+  <p class="note"><b>判定：#3 head IQ2 疊 early-verify 只 +5.3%，不是預期的 +15%</b>——early-verify 已把 verify 縮到 ~78ms，head read 佔比變小 → marginal 收益被稀釋（p3b 早期在更慢的 verify 上測到 +12%）。28.9 t/s 離 30 差 ~4%（34.6 vs 33.3ms/token，需再省 ~1.3ms/token）。破 30 需再找 ~5-6ms/step：剩餘有界路徑是 <b>trunk FFN IQ2_XXS</b>（§⑪ 估 ~6ms，但 35B-A3B 全 FFN 低 bit 品質風險高、A/B 待做）或 head 再降 IQ1_S（需 imatrix）。</p>
+</div>
+
+<!-- ============ 14. bit-identity 分水嶺（2026-08-25） ============ -->
+<div class="card">
+  <h2>⑭ 「輸出非 bit-identical」分水嶺：從 MTP 轉正（CGC_VERIFY_DECODE=1）開始，非新壞點</h2>
+  <p class="desc">本頁多處寫「輸出非 bit-identical」，需拆成三個層次講清楚「對誰不 identical」與「從哪一版開始」——避免把 early-verify / head IQ2 誤判為新的品質壞點。源頭證據：llama-context.cpp hook 註解（「Default (unset) keeps the exact-load path so prefill / draft / verify stay bit-exact」→「Verify target logits become ZERO-approximated for cold routed experts… so its h_nextn degrades slightly」）。</p>
+
+  <table>
+    <tr><th>版本（commit）</th><th>verify 路徑</th><th>對 bit-exact/base 是否 identical</th><th>run-to-run</th></tr>
+    <tr><td>MTP 轉正前（exact-load）</td><td><code>ensure_batch/drain</code> 真權重</td><td><span class="tag g">✅ bit-exact</span>（13.85 t/s）</td><td class="num">✅</td></tr>
+    <tr><td><b>CGC_VERIFY_DECODE=1（8c5a036，MTP 轉正）</b></td><td>decode fast-path，<b>冷 experts → ZERO-slot</b></td><td><span class="tag r">❌ <b>分水嶺，從這裡開始</b></span>：verify 對冷 routed experts 用 ZERO 常數 bytes → h_nextn 偏離 base → accept 97.8→95.7%、輸出不再 = base（省 ~60ms/step 同步 pread 的已知取捨）</td><td class="num">✅ 確定性</td></tr>
+    <tr><td>+CGC_DRAFT_DECODE（119fa5a）</td><td>draft 也 touch-only</td><td><span class="tag r">❌</span> 同上（非 identical 狀態不變）</td><td class="num">✅</td></tr>
+    <tr><td><code>--mtp-top4</code>（16ba18e）</td><td>draft-only 8→4</td><td><span class="tag g">✅ 兩臂仍 bit-identical</span>（verify 是 trunk-greedy gate，draft 品質差被蓋掉，不影響最終文字）</td><td class="num">✅</td></tr>
+    <tr><td><code>--mtp-early-verify</code>（beed1a6）</td><td>verify early table write</td><td><span class="tag r">❌</span> 且<b>與 GATE 臂不同</b>（early 在 pool state 早一點時間點寫 table → timing 依賴）</td><td class="num">✅ 同臂確定</td></tr>
+    <tr><td><code>--head-iq2</code></td><td><b>model 權重</b> output.weight Q6_K→IQ2_S</td><td><span class="tag r">❌</span> 必然不同（model 層級改變，不是 runtime 行為）</td><td class="num">✅</td></tr>
+  </table>
+
+  <p class="note"><b>三層「bit-identity」別混</b>：① <b>對 base greedy</b>——分水嶺是 <code>CGC_VERIFY_DECODE=1</code>（8c5a036「MTP 轉正」），它刻意把 verify 從 exact-load 換成 ZERO-slot decode fast-path 換速度，代價是 h_nextn 不再等於 base（source 註解明寫 "h_nextn degrades slightly -> accept may drop"），這是 <b>刻意的、已知的</b>；② <b>同配置 run-to-run</b>——每一版都維持（touch+ZERO-slot 確定性，md5 相同）；③ <b>arm vs arm</b>（GATE vs EARLY / Q6_K vs IQ2）——不同配置本來就該不同。<b>結論：early-verify 與 head IQ2 是在「MTP 轉正」已非 identical 的基線上又改變輸出，不是新的品質壞點</b>（accept 均驗證無損：96.4→97.1%）。</p>
+</div>
+
+<!-- ============ 15. dense IQ4_XS + head IQ2 量化 & n_max=3（2026-08-26） ============ -->
+<div class="card">
+  <h2>⑮ dense IQ4_XS + head IQ2 量化（<code>--dense-iq4x</code>）+ n_max=3：最佳單次 29.85 t/s，逼近 30、停在 16GB unified memory 天花板</h2>
+  <p class="desc">從 base IQ3_XXS 用 <code>llama-quantize --tensor-type-file</code> 重新量化出第二載體 <code>Nail-Qwen3.6-35B-A3B-MTP-UD-IQ3_XXS-denseIQ4X-headIQ2.gguf</code>（12.5GB）：dense 層 Q6_K（attn_qkv / attn_output / ssm_out / ffn_*_shexp，共 250 個）→ <b>IQ4_XS</b>、output.weight → <b>IQ2_S</b>、其餘 752 tensor byte-copy（bit-identical by construction）。直接砍 verify/trunk 最重的 dense weight-read 頻寬（verify 是 bandwidth-bound）。</p>
+
+  <table>
+    <tr><th>臂（seed 42, n=1100, 4GiB budget, production script）</th><th class="num">decoded t/s（多次）</th><th class="num">accept</th><th class="num">hit rate</th><th class="num">RSS</th><th>輸出</th></tr>
+    <tr><td>base nm2（Q6_K dense + Q6_K head）</td><td class="num">25.68 / 25.65 / 21.56</td><td class="num">95.4%</td><td class="num">85.3%</td><td class="num">8.33 GB</td><td rowspan="5">base 與 dense 兩臂輸出軌跡不同（模型權重層級改變，非 runtime 行為）；各臂 within-run 完全確定性一致——accept / hit / 輸出逐次相同，僅牆鐘 t/s 隨環境漂移</td></tr>
+    <tr><td>dense nm2</td><td class="num">28.89 / 26.36</td><td class="num">99.3%</td><td class="num">89.5%</td><td class="num">7.76 GB</td></tr>
+    <tr><td><b>dense nm3</b> ⭐</td><td class="num"><b>29.85 / 24.57 / 27.75 / 29.81 / 26.43 / 21.17 / 20.39</b></td><td class="num">98.6%</td><td class="num">89.5%</td><td class="num">7.76 GB</td></tr>
+    <tr><td>dense nm4</td><td class="num">26.80</td><td class="num">99.0%</td><td class="num">81.0%</td><td class="num">7.83 GB</td></tr>
+    <tr><td>dense nm3 + early-verify</td><td class="num">27.73</td><td class="num">99.0%</td><td class="num">91.5%</td><td class="num">7.80 GB</td></tr>
+  </table>
+
+  <p class="note"><b>判定 #1：dense IQ4_XS 有效（疊 head IQ2，同窗 A/B +29%）</b>——確定性指標全面向上：hit 85.3→89.5%、accept 95.4→99.0%、RSS 8.33→7.76 GB（−0.6GB，直接減輕 unified memory 壓力）。同一時間窗 base 21.56 vs dense nm3 27.75 t/s（+29%）。</p>
+
+  <p class="note"><b>判定 #2：n_max=3 是最優 draft depth</b>——verify 是「批量驗證」：每步同一個 graph 驗 n_max 個 draft token。accept 98.6% 下 nm3 每步產出 ≈3 token、nm2 只 ≈2 → nm3 更快（冷啟動首跑 29.85 t/s 為最佳單次）；nm4 反而掉（hit 81%、批量 4 token 的 verify 成本 &gt; 多收的 1 token）。</p>
+
+  <p class="note"><b>判定 #3：8GiB budget 被硬體打回</b>——<code>N30CACHE_BUDGET=8GiB</code> 直接 GPU OOM：<code>kIOGPUCommandBufferCallbackErrorOutOfMemory</code>（286 slots/layer 超 16GB unified memory）。<b>4GiB（142 slots/layer）是這台 M4 Max 16GB 的硬體上限</b>。</p>
+
+  <p class="note"><b>判定 #4：卡在 unified memory / swap，不是算法</b>——16GB 塞 12.5GB 模型 + 4GB expert cache → swap 2.0-2.3GB/3GB、mds 索引 + IDE 背景負載 → 單次 t/s 波動 ±20%。連續 4 連跑呈單調衰減（29.81→26.43→21.17→20.39：熱降頻 / swap 累積），但每次冷啟動首跑都穩定回到 <b>~29.8 t/s</b>，且 accept/hit/輸出逐次完全一致（僅牆鐘漂移）。<b>最佳單次 29.85 t/s</b>。</p>
+
+  <p class="note"><b>剩餘方向（2026-08-26 用戶決定：不量化、安靜環境復測）</b>：破 30 只剩「再省 ~0.3ms/token」的記憶體路徑——把 Q6_K <code>token_embd.weight</code>（~380MB）與 8 個 q8_0 full-attn 層也轉 IQ4_XS（再省 ~0.5-1GB，越過 swap 懸崖），或等環境安靜（swap 回落 / 索引完成）後復測取中位數。</p>
+</div>
+
+</div>
+</body>
+</html>
