@@ -11,6 +11,13 @@ Core formula: W_ridge = (X^T X + λI)^{-1} X^T Y
   W = mapping matrix [head_dim, head_dim]
 
 Usage:
+  # Demo with synthetic data
+  python ridge_mapper.py demo
+
+  # Fit from calibration directory
+  python ridge_mapper.py fit --calibration_dir calibration_data/ --output kv_map.json
+
+  # Programmatic
   mapper = RidgeKVMapper(num_layers=40, num_heads=2, head_dim=256)
   mapper.fit(source_kvs, target_kvs, lambda_reg=1.0)
   mapped_kv = mapper.translate(source_kv)
@@ -191,6 +198,77 @@ class RidgeKVMapper:
         return float(np.mean(cos))
 
 
+def fit_from_calibration_dir(
+    calibration_dir: str,
+    output_path: str = None,
+    lambda_reg: float = 1.0,
+    use_keys_only: bool = True,
+):
+    """
+    Fit ridge regression from calibration pipeline output.
+    
+    Reads model_a_kv.npz and model_b_kv.npz from calibration_dir,
+    fits mapping, saves to output_path.
+    """
+    cal_dir = Path(calibration_dir)
+    
+    # Find KV files
+    kv_a_path = None
+    kv_b_path = None
+    
+    for pattern in ["model_a_kv_train.npz", "model_a_kv.npz"]:
+        if (cal_dir / pattern).exists():
+            kv_a_path = cal_dir / pattern
+            break
+    for pattern in ["model_b_kv_train.npz", "model_b_kv.npz"]:
+        if (cal_dir / pattern).exists():
+            kv_b_path = cal_dir / pattern
+            break
+    
+    if kv_a_path is None or kv_b_path is None:
+        print(f"ERROR: KV cache files not found in {cal_dir}")
+        return None
+    
+    print(f"Loading source KV: {kv_a_path.name}")
+    data_a = np.load(kv_a_path)
+    print(f"Loading target KV: {kv_b_path.name}")
+    data_b = np.load(kv_b_path)
+    
+    keys_a = sorted([k for k in data_a.files if not k.startswith("__")])
+    keys_b = sorted([k for k in data_b.files if not k.startswith("__")])
+    
+    # Get shape from first sample
+    first_kv = data_a[keys_a[0]]
+    num_layers, kv_2, num_heads, seq_len, head_dim = first_kv.shape
+    
+    if use_keys_only:
+        # Extract keys only (index 0 in the kv_2 dimension)
+        source_kvs = [data_a[k][:, 0] for k in keys_a]  # [layers, heads, seq, dim]
+        target_kvs = [data_b[k][:, 0] for k in keys_b]
+    else:
+        source_kvs = [data_a[k] for k in keys_a]
+        target_kvs = [data_b[k] for k in keys_b]
+    
+    print(f"  Samples: {len(source_kvs)} source, {len(target_kvs)} target")
+    print(f"  Shape: {num_layers} layers, {num_heads} heads, {head_dim} dim")
+    
+    # Fit
+    mapper = RidgeKVMapper(num_layers, num_heads, head_dim)
+    stats = mapper.fit(source_kvs, target_kvs, lambda_reg=lambda_reg)
+    
+    print(f"\nCalibration results:")
+    print(f"  Mean cosine: {stats['mean_cosine_similarity']:.4f}")
+    print(f"  Min cosine:  {stats['min_cosine_similarity']:.4f}")
+    print(f"  Max cosine:  {stats['max_cosine_similarity']:.4f}")
+    
+    # Save
+    if output_path is None:
+        output_path = str(cal_dir / "kv_map.json")
+    mapper.save(output_path)
+    
+    return mapper
+
+
 def demo_fit_and_translate():
     """Demo: fit on random data, verify translation works."""
     num_layers, num_heads, head_dim = 40, 2, 256
@@ -235,4 +313,27 @@ def demo_fit_and_translate():
 
 
 if __name__ == "__main__":
-    demo_fit_and_translate()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="RidgeKVMapper")
+    sub = parser.add_subparsers(dest="command")
+    
+    # demo mode
+    sub.add_parser("demo", help="Run demo with synthetic data")
+    
+    # fit from calibration dir
+    fit_parser = sub.add_parser("fit", help="Fit from calibration directory")
+    fit_parser.add_argument("--calibration_dir", required=True)
+    fit_parser.add_argument("--output", default=None)
+    fit_parser.add_argument("--lambda_reg", type=float, default=1.0)
+    
+    args = parser.parse_args()
+    
+    if args.command == "fit":
+        fit_from_calibration_dir(
+            args.calibration_dir,
+            args.output,
+            args.lambda_reg,
+        )
+    else:
+        demo_fit_and_translate()
