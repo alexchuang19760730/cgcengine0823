@@ -1,19 +1,55 @@
 # llama.cpp Deployment Guide
 
 **Version:** sync with current `dev` via `deploy-harmonyos/macos/build-macos.sh`
-**Platforms:** macOS (M4 Max) + HarmonyOS (Kirin 9030 + Maleoon 935)
+**Platforms:** macOS (M4 Max) + HarmonyOS (Kirin 9030 + Maleoon 935) + Windows (x86_64 CPU)
 
 ---
 
 ## Hardware Comparison
 
-| Spec | Mac M4 Max | HarmonyOS MateBook 14 |
+| Spec | Mac M4 Max | HarmonyOS MateBook 14 | Windows (this machine) |
 |------|-----------|----------------------|
 | CPU | 10-core Apple (4.05 GHz) | 8-core Kirin 9030 (2.75 GHz) |
 | GPU | Apple M4 (Metal) | Maleoon 935 (Vulkan 1.3) |
 | Memory | 546 GB/s bandwidth | ~44 GB/s bandwidth |
 | Backend | Metal GPU | **CPU-only** |
-| Expected (Qwen3.6 IQ3_XXS) | **25-29 t/s** | **3-5 t/s** |
+| Expected (Qwen3.6 IQ3_XXS) | **25-29 t/s** | **3-5 t/s** | **2-4 t/s** |
+
+---
+
+
+## Windows Deployment
+
+### Build from Source
+
+```batch
+cd deploy-harmonyos\windows
+build-windows.bat
+```
+
+### Run
+
+```bash
+# Basic decode
+./run.sh -m /path/to/model.gguf -ngl 4
+
+# MTP speculative decode
+./run.sh -m /path/to/model.gguf --mtp 2
+
+# OpenAI-compatible server
+./run.sh -m /path/to/model.gguf --server
+
+# With expert-cache (4GB)
+./run.sh -m /path/to/model.gguf --expert-cache 4294967296
+```
+
+### Package Release
+
+```batch
+package-windows.bat
+```
+
+Produces `llama-cpp-cgc-windows-x64.zip`.
 
 ---
 
@@ -102,4 +138,4 @@ CGC_OA_ASYNC=1 CGC_EXPERT_CACHE_BYTES=4294967296 llama-simple -m model.gguf -ngl
 
 ---
 
-*Version: current dev sync · Date: 2026-08-31*
+*Version: current dev sync · Date: 2026-09-01*
