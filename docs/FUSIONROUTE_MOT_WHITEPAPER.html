@@ -121,21 +121,21 @@ token t+1: router 切到专家 B
 
 <div class="mermaid">
 graph TB
-    subgraph CLIENT["📱 客户端层"]
+    subgraph CLIENT["Client Layer"]
         direction LR
         C1["Windows 端<br/>Agent Hub"]
         C2["Mac M4 云<br/>Decode Engine"]
         C3["鸿蒙 PC<br/>Decode Node"]
     end
 
-    subgraph ROUTER["🔀 FusionRoute Router"]
+    subgraph ROUTER["FusionRoute Router"]
         direction LR
         R1["Qwen3Router<br/>Token-level 路由分数"]
         R2["Complementary<br/>Logit 修正"]
         R3["KV Translation<br/>岭回归映射器"]
     end
 
-    subgraph CGC["⚡ CGC Engine Runtime"]
+    subgraph CGC["CGC Engine Runtime"]
         direction LR
         subgraph CACHE["Expert Cache Pool"]
             E1["Qwen3.6-35B<br/>Expert A<br/>13.7GB GGUF"]
@@ -148,7 +148,7 @@ graph TB
         end
     end
 
-    subgraph PD["🌐 PD 分离层"]
+    subgraph PD["PD Separation"]
         direction LR
         P1["端侧 Prefill<br/>短 prompt"]
         P2["云端 Prefill<br/>长 prompt"]
@@ -402,27 +402,25 @@ int llama_expert_cache_kv_translate(
 
 <div class="mermaid">
 graph TB
-    subgraph EDGE["🖥️ 端侧 (Windows 8GB)"]
+    subgraph EDGE["Edge: Windows 8GB"]
         direction LR
-        EA["Expert A<br/>Qwen3.6-35B<br/>本地 decode"]
-        EB["Expert B<br/>Ornith-1.5<br/>本地 decode"]
+        EA["Expert A: Qwen3.6-35B<br/>Local decode"]
+        EB["Expert B: Ornith-1.5<br/>Local decode"]
     end
 
-    subgraph CLOUD["☁️ 云端 (Mac M4 16GB)"]
+    subgraph CLOUD["Cloud: Mac M4 16GB"]
         direction LR
-        CA["Expert A<br/>Qwen3.6-35B<br/>25 t/s MTP"]
-        CB["Expert B<br/>Ornith-1.5<br/>25 t/s MTP"]
+        CA["Expert A: Qwen3.6-35B<br/>25 t/s MTP"]
+        CB["Expert B: Ornith-1.5<br/>25 t/s MTP"]
     end
 
-    subgraph ROUTE["🔀 调度决策"]
-        direction TB
-        D1{"token 难度<br/>评估"}
-        D1 -->|"简单 token"| EDGE
-        D1 -->|"复杂 token"| CLOUD
-        D1 -->|"KV Translation"| ROUTE
-    end
-
-    C1["用户请求"] --> D1
+    D1["Token difficulty<br/>assessment"]
+    C1["User request"] --> D1
+    D1 -->|"Simple token"| EDGE
+    D1 -->|"Complex token"| CLOUD
+    D1 -->|"KV Translation"| KV["KV Map Matrix<br/>117MB"]
+    KV --> EDGE
+    KV --> CLOUD
 </div>
 
 <h3>5.2 调度策略对比</h3>
