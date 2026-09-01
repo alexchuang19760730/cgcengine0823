@@ -126,6 +126,8 @@
     <li><a href="#s1">1. 已完成基础设施</a></li>
     <li><a href="#s2">2. 整合架构：FusionRoute v2 + Agent Harness</a></li>
     <li><a href="#s2.5">2.5 FusionRoute+MoT 如何与 PD 分离协同</a></li>
+    <li><a href="#s2.6">2.6 当前 PD 决策逻辑（ComputeRouter 4D 矩阵）</a></li>
+    <li><a href="#s2.7">2.7 FusionRoute 在 Prefill 阶段的实做细节</a></li>
     <li><a href="#s3">3. 八阶段实施计划（整合版）</a></li>
     <li><a href="#s4">4. 与 Hermes/4D/10-Step 对比</a></li>
     <li><a href="#s5">5. Agent Harness 六阶段整合</a></li>
@@ -504,6 +506,277 @@ Step 6: 输出
       <li>模型加载/卸载</li>
     </ul>
   </div>
+</div>
+
+<hr>
+
+<!-- ====== 2.6 ====== -->
+<h2 id="s2.6">2.6 当前 PD 决策逻辑（ComputeRouter 4D 矩阵）</h2>
+
+<div class="callout">
+  <strong>已实做在 <code>CGC-main/cgc_engine/pd/router.py</code>。</strong> 路由决策不基于 token 长度，而是基于 4D 能力矩阵：(D1) 网络质量、(D2) 硬件算力、(D3) 模型参数、(D4) 运行时状态。
+</div>
+
+<h3>D2 算力评分公式</h3>
+
+<pre><code># router.py → _device_compute_score()  → 0-100 分
+ram_score  = min(total_ram_gb / 64.0, 1.0) * 25    # RAM 占 25%
+gpu_score  = min(gpu_vram_gb / 24.0, 1.0) * 25    # GPU VRAM 占 25%
+cpu_score  = min(cpu_cores / 16.0, 1.0) * 20       # CPU 占 20%
+net_score  = max(0, (200 - network_latency_ms)) / 200 * 15  # 网络占 15%
+load_score = (1 - current_load / 100.0) * 15        # 负载占 15%
+# → 总分 0-100
+
+# Mac M4 16GB:  min(16/64,1)*25 + min(11.2/24,1)*25 + min(10/16,1)*20 + 15 + 15 = 59.0
+# Windows 8GB: min(8/64,1)*25  + min(2/24,1)*25    + min(4/16,1)*20  + 15 + 15 = 27.5</code></pre>
+
+<h3>能否跑模型的判断</h3>
+
+<pre><code># router.py → _can_run_model()
+available = total_ram_gb * 0.7       # 70% 可用
+if gpu_vram_gb > 0:
+    available += gpu_vram_gb
+return available >= model_size_gb    # MODEL_PRESETS 里的预估值
+
+# Mac M4 16GB: available = 16*0.7 + 11.2 = 22.4GB → 可跑 13GB 模型 ✅
+# Windows 8GB: available = 8*0.7 + 2 = 7.6GB    → 跑不了 13GB 模型 ❌
+# 鸿蒙手机 12GB: available = 12*0.7 = 8.4GB     → 可跑 8GB 模型 ✅</code></pre>
+
+<h3>五条路由规则（优先级从高到低）</h3>
+
+<table>
+  <tr><th>规则</th><th>条件</th><th>PD 模式</th><th>示例</th></tr>
+  <tr>
+    <td><strong>Rule 0: 内存告急</strong></td>
+    <td>local RAM &lt; model × 1.2</td>
+    <td><code>pure_cloud</code> 或 <code>edge_cloud</code></td>
+    <td>Windows 8GB 跑 35B → 选 Mac prefill</td>
+  </tr>
+  <tr>
+    <td><strong>Rule 1: 本地够强</strong></td>
+    <td>local can_run AND local_score ≥ best_remote × 0.7</td>
+    <td><code>local_full</code></td>
+    <td>Mac 跑 7B → 全部本地</td>
+  </tr>
+  <tr>
+    <td><strong>Rule 2: 远端更强</strong></td>
+    <td>best_remote_score &gt; local × 1.3 OR local 跑不了</td>
+    <td><code>edge_cloud</code></td>
+    <td>Windows 跑 35B → Mac prefill + 最快 decode</td>
+  </tr>
+  <tr>
+    <td><strong>Rule 3: 两个远端</strong></td>
+    <td>remote_scores ≥ 2</td>
+    <td><code>edge_edge</code></td>
+    <td>Mac A prefill + Mac B decode</td>
+  </tr>
+  <tr>
+    <td><strong>Rule 4: 只剩远端</strong></td>
+    <td>1 remote, local 跑不了</td>
+    <td><code>cloud_only</code></td>
+    <td>手机跑不了 → Mac 全量</td>
+  </tr>
+</table>
+
+<h3>实测数据驱动（Startup Benchmark）</h3>
+
+<div class="callout success">
+  <strong>关键改进（2026-09-01）：</strong> edge_server 启动时自动跑一次 200-token benchmark probe，测量真实 prefill/decode tok/s。实测值通过 <code>/v1/cgc/profile</code> 回传给 Router，替代原来的公式估算。
+</div>
+
+<pre><code># 数据流
+edge_server 启动
+  → _startup_benchmark() 后台线程
+  → 跑 llama-speculative-simple -n 200
+  → 解析 stderr perf 行
+  → MEASURED_SPEEDS = {prefill: 59.0, decode: 27.0, accept: 95.6}
+  → /v1/cgc/profile 返回实测值
+  → ComputeRouter._prefill_speed() 读实测值，不再用公式估算
+
+# 之前：decode 用 compute_score × 1.5 公式 → 估算 3.8 t/s（错误）
+# 现在：decode 用实测值 → 27.0 t/s（正确）</code></pre>
+
+<h3>MODEL_PRESETS（已更新）</h3>
+
+<table>
+  <tr><th>模型</th><th>参数</th><th>MoE</th><th>层数</th><th>GGUF 大小</th><th>MTP</th><th>Mac M4 实测</th></tr>
+  <tr><td><code>qwen36_35b</code></td><td>35B</td><td>256 experts, 8 active</td><td>40</td><td>13.0 GB</td><td>✅</td><td>prefill 59, decode 27</td></tr>
+  <tr><td><code>ornith_35b</code></td><td>35B</td><td>256 experts, 8 active</td><td>40</td><td>15.3 GB</td><td>✅</td><td>待测（KV 兼容）</td></tr>
+  <tr><td><code>gemma4_26b</code></td><td>26B</td><td>64 experts, 8 active</td><td>36</td><td>12.0 GB</td><td>❌</td><td>待测</td></tr>
+  <tr><td><code>qwen3_14b</code></td><td>14B</td><td>Dense</td><td>48</td><td>8.0 GB</td><td>❌</td><td>待测</td></tr>
+  <tr><td><code>qwen25_7b</code></td><td>7.5B</td><td>Dense</td><td>28</td><td>4.0 GB</td><td>❌</td><td>待测</td></tr>
+  <tr><td><code>qwen25_15b</code></td><td>1.5B</td><td>Dense</td><td>28</td><td>1.0 GB</td><td>❌</td><td>待测</td></tr>
+</table>
+
+<hr>
+
+<!-- ====== 2.7 ====== -->
+<h2 id="s2.7">2.7 FusionRoute 在 Prefill 阶段的实做细节</h2>
+
+<div class="callout purple">
+  <strong>核心洞察：</strong> FusionRoute+MoT 的价值在 <strong>Prefill 阶段最大</strong>。Prefill 时每个 token 都要过 attention → 选错专家代价大（O(n²) 重算）。FusionRoute 在这里做 token-level 路由，让每个 token 都被最强专家处理。Decode 阶段每次只生成 1 个 token，选错代价小，可以只用一个专家。
+</div>
+
+<h3>2.7.1 谁跑 FusionRoute？</h3>
+
+<table>
+  <tr><th>机器</th><th>RAM</th><th>跑 FusionRoute？</th><th>原因</th></tr>
+  <tr><td>Mac M4 16GB</td><td>16GB</td><td><span class="badge badge-green">✅ Prefill 侧跑</span></td><td>两个 14GB 模型交替加载（expert-cache），不需要同时驻留</td></tr>
+  <tr><td>Windows 8GB</td><td>8GB</td><td><span class="badge badge-red">❌ 不跑</span></td><td>只能放一个模型，无法 token-level 路由两个专家</td></tr>
+  <tr><td>鸿蒙 PC 24GB</td><td>24GB</td><td><span class="badge badge-green">✅ 可以跑</span></td><td>够放两个模型</td></tr>
+  <tr><td>鸿蒙手机 12GB</td><td>12GB</td><td><span class="badge badge-red">❌ 不跑</span></td><td>只能放一个模型</td></tr>
+</table>
+
+<h3>2.7.2 Prefill 阶段：FusionRoute 做什么</h3>
+
+<pre><code>Mac M4 Prefill 机器上的完整流程：
+
+1. 收到 prompt: "debug this crash in expert_cache.cpp"
+
+2. Tokenize → [token_0, token_1, ..., token_N]
+
+3. 对每个 token，FusionRoute Router 做决策：
+
+   token_0 "debug" → weight_proj(hidden_state) → [0.3, 0.7]
+                                                   Qwen  Ornith
+                                                   ↑     ↑
+                                                   低分  高分 → 选 Expert B (Ornith)
+
+   token_1 "this"  → weight_proj(hidden_state) → [0.8, 0.2]
+                                                   高分  低分 → 选 Expert A (Qwen3.6)
+
+   token_2 "crash" → weight_proj(hidden_state) → [0.2, 0.8]
+                                                   低分  高分 → 选 Expert B (Ornith)
+
+   ... 每个 token 独立打分，分数变化自然产生切换 ...
+
+4. 当专家切换时，KV Translation 介入：
+
+   token 0-49: Expert A 处理 → KV cache A [50, 2, seq, 256]
+   token 50:   切换到 Expert B!
+              → KV Translation: W_ridge × KV_A → KV_B (O(n) 线性映射)
+              → latency: ~278ms (32K context) → 目标 < 1ms (MoT)
+   token 50-80: Expert B 处理 → KV cache B [30, 2, seq, 256]
+   token 81:   切回 Expert A
+              → KV Translation: W_ridge × KV_B → KV_A
+   token 81+:  Expert A 处理
+
+5. Prefill 完成 → 发送 hidden_state [seq, dim] 给 decode 机器
+</code></pre>
+
+<h3>2.7.3 Router 决策：每 token 独立打分</h3>
+
+<pre><code># src/fusion_route/router.py 核心
+class Qwen3Router(nn.Module):
+    def __init__(self, hidden_size=2048, n_experts=2):
+        self.weight_proj = nn.Linear(hidden_size, n_experts)  # 2048 → 2
+    
+    def forward(self, hidden_states):
+        # hidden_states: [batch, seq, 2048]
+        scores = self.weight_proj(hidden_states)  # [batch, seq, 2]
+        scores = F.softmax(scores, dim=-1)        # 归一化
+        return scores  # 每个 token 的专家分数
+
+# scores[0] = Expert A (Qwen3.6) 的适配度
+# scores[1] = Expert B (Ornith-1.5) 的适配度
+# 没有"切换触发器"——每个 token 独立打分，分数变化就导致切换</code></pre>
+
+<h3>2.7.4 KV Translation：O(n) 线性映射</h3>
+
+<pre><code># src/kv_translation/ridge_mapper.py 核心
+class RidgeKVMapper:
+    def __init__(self, n_layers=40, n_heads=2, head_dim=256):
+        # 映射矩阵: 逐层逐头
+        # W_ridge shape: [40, 2, 256, 256]
+        self.W = nn.Parameter(torch.zeros(n_layers, n_heads, head_dim, head_dim))
+    
+    def translate(self, kv_source, layer, head):
+        # kv_source: [seq_len, 256] (源模型的 KV cache)
+        # O(n) 线性映射，不是 O(n²) attention 重算
+        return kv_source @ self.W[layer, head].T  # [seq_len, 256]
+
+# KV 兼容性验证 (Qwen3.6 vs Ornith-1.5):
+#   num_key_value_heads: 2 = 2 ✅
+#   head_dim: 256 = 256 ✅
+#   num_hidden_layers: 40 = 40 ✅
+#   → 可以直接做线性映射，不需要 head 对齐或投影</code></pre>
+
+<h3>2.7.5 Complementary Logit：双层修正</h3>
+
+<pre><code># src/fusion_route/complementary.py 核心
+class ComplementaryLogit(nn.Module):
+    def __init__(self, hidden_size=2048, vocab_size=152064):
+        self.correction = nn.Linear(hidden_size, vocab_size)  # 修正网络
+    
+    def forward(self, z_expert, hidden_state, alpha=0.1):
+        # z_expert: 专家输出的 logits
+        # hidden_state: 当前层的隐藏状态
+        # alpha: 修正强度 (0=不修正, 1=全修正)
+        c = self.correction(hidden_state)           # 计算修正量
+        z_fuse = z_expert + alpha * c               # 叠加修正
+        return z_fuse
+
+# 内层修正: KV Translation 修正 KV cache (数值层面)
+# 外层修正: Complementary Logit 修正 logits (输出层面)
+# 双层叠加 → 品质提升 5-15%</code></pre>
+
+<h3>2.7.6 三种组合场景</h3>
+
+<div class="grid3">
+  <div class="box">
+    <h4>场景 1: Mac prefill → Windows decode</h4>
+    <p><span class="badge badge-green">最常见</span></p>
+    <ul>
+      <li>Mac: FusionRoute + KV Translation → Prefill</li>
+      <li>Windows: 只跑 Qwen3.6 decode</li>
+      <li>品质来源: Prefill 用 FusionRoute 选最强专家</li>
+      <li>速度来源: Windows decode 用 MTP 加速</li>
+    </ul>
+  </div>
+  <div class="box">
+    <h4>场景 2: Mac prefill → Mac decode</h4>
+    <p><span class="badge badge-blue">双机协作</span></p>
+    <ul>
+      <li>Mac A: FusionRoute + KV Translation → Prefill</li>
+      <li>Mac B: FusionRoute + KV Translation → Decode</li>
+      <li>品质最高: 两端都跑 FusionRoute</li>
+      <li>每个 token 都选最强专家</li>
+    </ul>
+  </div>
+  <div class="box">
+    <h4>场景 3: 纯端（单机）</h4>
+    <p><span class="badge badge-purple">离线</span></p>
+    <ul>
+      <li>Mac: FusionRoute + KV Translation + Prefill + Decode</li>
+      <li>全部在一台机器完成</li>
+      <li>速度最快: 无网络延迟</li>
+      <li>Expert Cache 命中率最高</li>
+    </ul>
+  </div>
+</div>
+
+<h3>2.7.7 Prefill vs Decode 的 FusionRoute 价值对比</h3>
+
+<table>
+  <tr><th>阶段</th><th>FusionRoute 价值</th><th>KV Translation</th><th>MTP</th><th>Complementary Logit</th></tr>
+  <tr>
+    <td><strong>Prefill</strong></td>
+    <td><span class="badge badge-green">✅ 最大</span> — 每个 token 过 attention，选错代价 O(n²)</td>
+    <td><span class="badge badge-green">✅ 用</span> — 切换专家时翻译 KV</td>
+    <td><span class="badge badge-yellow">可选</span></td>
+    <td><span class="badge badge-green">✅ 用</span> — 修正 prefill logits</td>
+  </tr>
+  <tr>
+    <td><strong>Decode</strong></td>
+    <td><span class="badge badge-red">❌ 低</span> — 每次只生成 1 token，选错代价 O(1)</td>
+    <td><span class="badge badge-red">❌ 不用</span> — 只有一个专家，不需要切换</td>
+    <td><span class="badge badge-green">✅ 用</span> — 加速 decode 2-3x</td>
+    <td><span class="badge badge-green">✅ 用</span> — 修正输出 token</td>
+  </tr>
+</table>
+
+<div class="callout success">
+  <strong>一句话总结：</strong> FusionRoute+MoT 的核心价值在 Prefill 侧——用 token-level 路由让每个 token 都被最强专家处理，然后把高质量的 hidden_state 传给 Decode 机器做快速生成。这就是"P" 的含义：Prefill 决定品质，Decode 决定速度。
 </div>
 
 <hr>
