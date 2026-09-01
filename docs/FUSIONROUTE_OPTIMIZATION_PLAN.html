@@ -107,10 +107,9 @@
   });
 </script>
 
-<h1>FusionRoute+MoT 优化方案</h1>
-<p class="subtitle">
-  整合 Agent Harness 六阶段 + 取代 Hermes Router + 4D Perception Matrix + 10-Step Pipeline<br>
-  基于已有 PD 分离（端云/端端/纯云/纯端）+ Exo/iroh-net P2P 基础设施
+<h1>FusionRoute+MoT 优化方案</h1>  <p class="subtitle">
+  整合 Agent Harness 六阶段 + ComputeRouter 规则路由 + KV Translation MoT<br>
+  基于已有 PD 分离（端云/端端/纯云/纯端）+ Exo/iroh-net P2P + Expert Cache + MTP 基础设施
 </p>
 <div class="meta">
   <span>版本: v2.0</span>
@@ -139,8 +138,7 @@
 <!-- ====== 0 ====== -->
 <h2 id="s0">0. Executive Summary</h2>
 
-<div class="callout success">
-  <strong>一句话结论：</strong> 这份计划整合了 Agent Harness 六阶段训练流程 + FusionRoute+MoT 推理调度系统。已有基础设施（PD 分离四种模式、Exo/iroh-net P2P、Expert Cache、MTP）全部复用，不需要重新实现。需要新做的是：4D 感知层、智能路由、Speculation ROI 门控、KV Translation 生产化。
+<div class="callout success">    <strong>一句话结论：</strong> 这份计划整合了 Agent Harness 六阶段训练流程 + FusionRoute+MoT 推理调度系统。已有基础设施（PD 分离四种模式、Exo/iroh-net P2P、Expert Cache、MTP、ComputeRouter 4D 规则路由）全部复用。需要新做的是：PerceptionLayer 实时采集、Speculation ROI 门控、KV Translation 生产化、SFT/CDPO 训练。
 </div>
 
 <div class="grid3">
@@ -158,7 +156,7 @@
     <h4>🔧 需要新做</h4>
     <ul>
       <li>4D PerceptionLayer</li>
-      <li>SmartRouter (取代 Hermes)</li>
+      <li>ComputeRouter 规则路由 (已验证，取代 Hermes)</li>
       <li>SpeculationGuard (ROI 门控)</li>
       <li>KV Translation 生产化</li>
       <li>SFT + CDPO 真实训练</li>
@@ -319,7 +317,7 @@ graph TB
     subgraph DECIDE["决策层 FusionRoute v2"]
         direction LR
         D1["PerceptionLayer 4D 特征"]
-        D2["SmartRouter 选择模式+专家"]
+        D2["ComputeRouter 4D规则路由"]
         D3["RoutePolicyV2 输出策略"]
     end
     subgraph ROUTE["路由层 PD分离 + KV Translation"]
@@ -450,7 +448,7 @@ Step 1: PerceptionLayer 采集 4D 特征
   D3 Model: params=35B, is_moe=true
   D4 Runtime: load=0.3, expert_hit=0.85
 
-Step 2: SmartRouter 决策
+Step 2: ComputeRouter 4D矩阵决策
   分析: prompt 含 "debug" → 代码任务 → Ornith 更强
   分析: RAM=8GB < 13GB → 本地跑不下 35B
   分析: RTT=2ms → LAN 延迟低
@@ -800,16 +798,16 @@ class ComplementaryLogit(nn.Module):
   </ul>
 </div>
 
-<h3>Phase 2: 智能路由 (Week 3-4) <span class="badge badge-red">P0</span></h3>
+<h3>Phase 2: 智能路由 (Week 3-4) <span class="badge badge-green">已完成</span></h3>
 
 <div class="phase-box">
   <h4>目标：Router 根据系统状态做路由决策</h4>
   <p>路由决策从"选专家"扩展为"选模式+专家+策略"。输出 RoutePolicyV2。</p>
   <ul>
-    <li>实现 <code>SmartRouter</code> 类</li>
-    <li>内存不足时自动切换端云模式</li>
-    <li>网络延迟高时自动切换纯端模式</li>
-    <li>Accept rate 低时自动关闭 speculation</li>
+    <li><code>ComputeRouter</code> 4D 矩阵规则路由（已完成 ✅）</li>
+    <li>内存不足时自动切换端云模式（Rule 0）</li>
+    <li>远端更强时自动切换 edge_cloud（Rule 2）</li>
+    <li>实测 tok/s 驱动决策（Startup Benchmark）</li>
   </ul>
 </div>
 
@@ -994,12 +992,12 @@ flowchart LR
     subgraph TRAIN["Training Pipeline"]
         direction TB
         T1["SFT: finetune Qwen3.6 + Ornith"]
-        T2["CDPO: train SmartRouter"]
+        T2["CDPO: 训练FusionRoute Router"]
         T3["KV: calibrate W_ridge"]
     end
     subgraph INFERENCE["Inference Pipeline"]
         direction TB
-        I1["SmartRouter"]
+        I1["ComputeRouter + FusionRoute"]
         I2["KV Translation"]
         I3["Expert Cache + MTP"]
         I4["PD分离 端云/端端/纯云/纯端"]
@@ -1063,10 +1061,10 @@ flowchart LR
     <ul>
       <li>代码开发（全部 Phase）</li>
       <li>单元测试（WSL2）</li>
-      <li>CDPO 训练（mock 数据）</li>
       <li>PerceptionLayer 实现</li>
-      <li>SmartRouter 实现</li>
+      <li>ComputeRouter 规则路由（已完成 ✅）</li>
       <li>SpeculationGuard 实现</li>
+      <li>Hermes SFT 5000 条数据（已采集 ✅，等 Mac 在线训练）</li>
       <li>文档 + 配置</li>
     </ul>
     <p><strong>≈ 6-8 周工作量</strong></p>
@@ -1095,7 +1093,7 @@ gantt
 
     section Phase 1-2: 4D + Router
     PerceptionLayer         :a1, 2026-09-08, 5d
-    SmartRouter             :a2, after a1, 5d
+    ComputeRouter 4D规则 (已完成)
 
     section Phase 3-4: KV + Speculation
     Mac KV Calibration      :b1, after a2, 1d
@@ -1116,13 +1114,13 @@ gantt
 
 <table>
   <tr><th>指标</th><th>当前</th><th>Phase 4 后</th><th>Phase 8 后</th></tr>
-  <tr><td>路由延迟</td><td>N/A</td><td>&lt; 1ms</td><td>&lt; 1ms</td></tr>
+  <tr><td>路由延迟</td><td>< 1ms (规则)</td><td>&lt; 1ms</td><td>&lt; 1ms</td></tr>
   <tr><td>KV Translation cosine</td><td>0.995 (synthetic)</td><td>&gt; 0.95 (real)</td><td>&gt; 0.95</td></tr>
   <tr><td>Mac decode 速度</td><td>27 t/s (单模型)</td><td>20-24 t/s (2 专家)</td><td>20-24 t/s</td></tr>
   <tr><td>Agent 任务完成率</td><td>~50%</td><td>~60%</td><td><strong>&gt; 70%</strong></td></tr>
   <tr><td>Speculation 自动开关</td><td>手动</td><td>✅ 自动</td><td>✅ 自动</td></tr>
   <tr><td>SFT 质量提升</td><td>baseline</td><td>+10-15%</td><td>+15-20%</td></tr>
-  <tr><td>Router 路由准确率</td><td>N/A</td><td>&gt; 70%</td><td>&gt; 80%</td></tr>
+  <tr><td>Router 路由准确率</td><td>N/A (规则路由，无需训练)</td><td>规则路由（4D 矩阵）</td><td>规则路由 + 实测 tok/s</td></tr>
 </table>
 
 <div class="callout success">
