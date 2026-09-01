@@ -125,6 +125,7 @@
     <li><a href="#s0">0. Executive Summary</a></li>
     <li><a href="#s1">1. 已完成基础设施</a></li>
     <li><a href="#s2">2. 整合架构：FusionRoute v2 + Agent Harness</a></li>
+    <li><a href="#s2.5">2.5 FusionRoute+MoT 如何与 PD 分离协同</a></li>
     <li><a href="#s3">3. 八阶段实施计划（整合版）</a></li>
     <li><a href="#s4">4. 与 Hermes/4D/10-Step 对比</a></li>
     <li><a href="#s5">5. Agent Harness 六阶段整合</a></li>
@@ -301,6 +302,211 @@ graph TB
     style E3 fill:#db6d2833,stroke:#db6d28,color:#f0f6fc
     style E4 fill:#db6d2833,stroke:#db6d28,color:#f0f6fc
 </div>
+
+<!-- ====== 2.5 ====== -->
+<h2 id="s2.5">FusionRoute+MoT 如何与 PD 分离协同</h2>
+
+<div class="callout success">
+  <strong>核心关系：</strong> FusionRoute+MoT 是<strong>决策层</strong>，PD 分离是<strong>执行层</strong>。Router 决定"用哪种 PD 模式 + 选哪个专家 + 是否开 MTP"，PD 分离负责实际的 prefill/decode 分工。两者不冲突，是上下级关系。
+</div>
+
+<h3>2.1 三层架构关系</h3>
+
+<div class="mermaid">
+graph TB
+    subgraph DECIDE["决策层 FusionRoute v2"]
+        direction LR
+        D1["PerceptionLayer 4D 特征"]
+        D2["SmartRouter 选择模式+专家"]
+        D3["RoutePolicyV2 输出策略"]
+    end
+    subgraph ROUTE["路由层 PD分离 + KV Translation"]
+        direction LR
+        R1["端云: Mac prefill, Windows decode"]
+        R2["端端: Mac A prefill, Mac B decode"]
+        R3["纯云: Cloud 全量推理"]
+        R4["纯端: 本地 GPU+CPU"]
+        R5["KV Translation: 跨专家切换"]
+    end
+    subgraph EXEC["执行层 CGC Engine"]
+        direction LR
+        E1["Expert Cache 4GiB"]
+        E2["MTP Speculative"]
+        E3["llama-server"]
+    end
+    D1 --> D2 --> D3
+    D3 --> R1 and R2 and R3 and R4
+    R1 and R2 --> R5
+    R1 and R2 and R3 and R4 --> E1
+    E1 --> E2 --> E3
+    style DECIDE fill:#161b22,stroke:#58a6ff
+    style ROUTE fill:#161b22,stroke:#3fb950
+    style EXEC fill:#161b22,stroke:#db6d28
+    style D1 fill:#1f6feb33,stroke:#58a6ff,color:#f0f6fc
+    style D2 fill:#1f6feb33,stroke:#58a6ff,color:#f0f6fc
+    style D3 fill:#1f6feb33,stroke:#58a6ff,color:#f0f6fc
+    style R1 fill:#23863633,stroke:#3fb950,color:#f0f6fc
+    style R2 fill:#23863633,stroke:#3fb950,color:#f0f6fc
+    style R3 fill:#23863633,stroke:#3fb950,color:#f0f6fc
+    style R4 fill:#23863633,stroke:#3fb950,color:#f0f6fc
+    style R5 fill:#d2992233,stroke:#d29922,color:#f0f6fc
+    style E1 fill:#db6d2833,stroke:#db6d28,color:#f0f6fc
+    style E2 fill:#db6d2833,stroke:#db6d28,color:#f0f6fc
+    style E3 fill:#db6d2833,stroke:#db6d28,color:#f0f6fc
+</div>
+
+<h3>2.2 路由决策矩阵：什么时候用哪种 PD 模式</h3>
+
+<table>
+  <tr><th>请求特征</th><th>系统状态</th><th>Router 决策</th><th>PD 模式</th><th>品质/速度</th></tr>
+  <tr>
+    <td>短 prompt (&lt;512 tok)</td>
+    <td>本地 RAM 够</td>
+    <td>local_only</td>
+    <td><span class="badge badge-purple">纯端</span></td>
+    <td>速度优先：本地 decode，无网络延迟</td>
+  </tr>
+  <tr>
+    <td>长 prompt (&gt;2048 tok)</td>
+    <td>Mac 在线</td>
+    <td>edge_pivot_draft</td>
+    <td><span class="badge badge-green">端云</span></td>
+    <td>品质优先：Mac prefill 更快更好，KV Translation 保状态连续</td>
+  </tr>
+  <tr>
+    <td>代码/Agent 任务</td>
+    <td>Ornith 在线</td>
+    <td>expert_b + edge</td>
+    <td><span class="badge badge-green">端云</span></td>
+    <td>品质优先：Ornith 代码能力更强，Mac 做 prefill</td>
+  </tr>
+  <tr>
+    <td>简单 Q&A</td>
+    <td>任意</td>
+    <td>expert_a + local</td>
+    <td><span class="badge badge-purple">纯端</span></td>
+    <td>速度优先：Qwen3.6 通用够用，本地更快</td>
+  </tr>
+  <tr>
+    <td>隐私敏感</td>
+    <td>任意</td>
+    <td>local_only + disable_spec</td>
+    <td><span class="badge badge-purple">纯端</span></td>
+    <td>隐私优先：不出本地网络，关闭 speculation 减少信息泄露</td>
+  </tr>
+  <tr>
+    <td>高吞吐批量</td>
+    <td>Cloud GPU 可用</td>
+    <td>cloud_only</td>
+    <td><span class="badge badge-yellow">纯云</span></td>
+    <td>吞吐优先：Cloud GPU 并行处理</td>
+  </tr>
+  <tr>
+    <td>跨模型推理</td>
+    <td>双机在线</td>
+    <td>expert_switch + kv_translate</td>
+    <td><span class="badge badge-blue">端端</span></td>
+    <td>品质优先：KV Translation 保状态连续</td>
+  </tr>
+</table>
+
+<h3>2.3 品质 vs 速度权衡曲线</h3>
+
+<div class="mermaid">
+xychart-beta
+    title "不同配置的品质-速度权衡"
+    x-axis ["纯端 7B", "纯端 35B", "端云 35B", "端云+FusionRoute", "纯云 GPU"]
+    y-axis "相对品质分" 0 --> 100
+    bar [60, 75, 85, 92, 95]
+    line [30, 3, 27, 22, 40]
+</div>
+
+<table>
+  <tr><th>配置</th><th>品质分</th><th>速度 (tok/s)</th><th>成本</th><th>适用场景</th></tr>
+  <tr><td>纯端 7B</td><td>60</td><td>30</td><td>零</td><td>离线、简单任务</td></tr>
+  <tr><td>纯端 35B</td><td>75</td><td>3</td><td>零</td><td>离线、需要质量</td></tr>
+  <tr><td>端云 35B (无 FusionRoute)</td><td>85</td><td>27</td><td>低</td><td>长 prompt 加速</td></tr>
+  <tr><td><strong>端云 + FusionRoute+MoT</strong></td><td><strong>92</strong></td><td><strong>22</strong></td><td>低</td><td><strong>最优平衡</strong></td></tr>
+  <tr><td>纯云 GPU</td><td>95</td><td>40</td><td>高</td><td>无本地算力</td></tr>
+</table>
+
+<div class="callout warn">
+  <strong>关键洞察：</strong> FusionRoute+MoT 在端云模式下，品质从 85 提升到 92（+7），速度从 27 降到 22（-19%）。这是因为：<br>
+  • KV Translation 开销（偶尔切换时 ~278ms）<br>
+  • Router 决策开销（&lt;1ms，可忽略）<br>
+  • 但品质提升来自：(1) Ornith-1.5 处理代码 token 更准，(2) Complementary Logit 修正局部错误<br>
+  <strong>结论：牺牲 19% 速度换 7% 品质提升，对 Agent/Code 场景值得。</strong>
+</div>
+
+<h3>2.4 一个请求的完整生命周期</h3>
+
+<pre><code>用户输入: "debug this crash in expert_cache.cpp"
+
+Step 1: PerceptionLayer 采集 4D 特征
+  D1 Network: RTT=2ms (LAN)
+  D2 Hardware: RAM=8GB, GPU=none
+  D3 Model: params=35B, is_moe=true
+  D4 Runtime: load=0.3, expert_hit=0.85
+
+Step 2: SmartRouter 决策
+  分析: prompt 含 "debug" → 代码任务 → Ornith 更强
+  分析: RAM=8GB < 13GB → 本地跑不下 35B
+  分析: RTT=2ms → LAN 延迟低
+  决策: mode=端云, expert=Ornith, draft=mtp
+  输出: RoutePolicyV2 {
+    route_mode: "edge_pivot_draft",
+    draft_mode: "mtp",
+    target_node: "mac-m4",
+    confidence: 0.92
+  }
+
+Step 3: PD 分离执行
+  Mac M4 (prefill): emit(prompt) → hidden_state [seq, 2816]
+  KV Translation: 翻译 (2816 → 2048) if needed
+  Windows (decode): resume(hidden_state) → SSE stream
+
+Step 4: MTP Speculative
+  Draft: 生成 3 个候选 token
+  Verify: 接受 2 个 (accept rate 95%+)
+  Speed: 22 tok/s 稳态
+
+Step 5: Complementary Logit
+  修正: z_fuse = z_ornith + 0.1 * correction
+  效果: 修复代码中的变量名错误
+
+Step 6: 输出
+  完整 token stream → 用户
+  总延迟: ~3s prefill + ~2s decode (100 tok)
+</code></pre>
+
+<h3>2.5 FusionRoute+MoT 不做的事</h3>
+
+<div class="grid2">
+  <div class="box">
+    <h4>✅ FusionRoute+MoT 负责</h4>
+    <ul>
+      <li>选哪种 PD 模式</li>
+      <li>选哪个专家 (Qwen3.6 / Ornith)</li>
+      <li>是否开 MTP speculation</li>
+      <li>KV Translation (跨专家切换)</li>
+      <li>Complementary Logit 修正</li>
+      <li>ROI 门控 (自动开关 speculation)</li>
+    </ul>
+  </div>
+  <div class="box">
+    <h4>❌ PD 分离 + CGC Engine 负责</h4>
+    <ul>
+      <li>实际的 prefill/decode 计算</li>
+      <li>Expert Cache 管理</li>
+      <li>网络传输 (emit/resume)</li>
+      <li>MTP draft + verify 执行</li>
+      <li>设备发现 (P2P/HTTP)</li>
+      <li>模型加载/卸载</li>
+    </ul>
+  </div>
+</div>
+
+<hr>
 
 <!-- ====== 3 ====== -->
 <h2 id="s3">3. 八阶段实施计划（整合版）</h2>
