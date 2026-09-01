@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FusionRoute+MoT 优化方案 — 取代 Hermes Router + 4D Perception Matrix + 10-Step Pipeline</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --heading: #f0f6fc;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --orange: #db6d28;
+    --purple: #bc8cff;
+    --code-bg: #0d1117;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+  h1 { font-size: 2rem; color: var(--heading); border-bottom: 2px solid var(--accent); padding-bottom: 0.5rem; margin-bottom: 1rem; }
+  h2 { font-size: 1.5rem; color: var(--accent); margin-top: 2.5rem; margin-bottom: 0.8rem; border-left: 4px solid var(--accent); padding-left: 0.8rem; }
+  h3 { font-size: 1.2rem; color: var(--green); margin-top: 1.8rem; margin-bottom: 0.5rem; }
+  h4 { font-size: 1.05rem; color: var(--yellow); margin-top: 1.2rem; margin-bottom: 0.4rem; }
+  p { margin-bottom: 0.8rem; }
+  .subtitle { color: var(--text); font-size: 1rem; opacity: 0.8; margin-bottom: 2rem; }
+  .meta { display: flex; gap: 2rem; flex-wrap: wrap; margin-bottom: 2rem; font-size: 0.85rem; color: var(--text); opacity: 0.7; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { border: 1px solid var(--border); padding: 0.6rem 0.8rem; text-align: left; }
+  th { background: var(--card); color: var(--heading); font-weight: 600; }
+  tr:nth-child(even) { background: var(--card); }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-size: 0.88em; font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+  pre { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.2rem; overflow-x: auto; margin: 1rem 0; font-size: 0.85rem; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; }
+  .callout { background: var(--card); border-left: 4px solid var(--accent); padding: 1rem 1.2rem; border-radius: 0 8px 8px 0; margin: 1.2rem 0; }
+  .callout.warn { border-left-color: var(--yellow); }
+  .callout.success { border-left-color: var(--green); }
+  .callout.danger { border-left-color: var(--red); }
+  .callout.purple { border-left-color: var(--purple); }
+  .callout strong { color: var(--heading); }
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 12px; font-size: 0.75rem; font-weight: 600; margin-right: 0.3rem; }
+  .badge-blue { background: #1f6feb33; color: var(--accent); }
+  .badge-green { background: #23863633; color: var(--green); }
+  .badge-red { background: #f8514933; color: var(--red); }
+  .badge-yellow { background: #9e6a0333; color: var(--yellow); }
+  .badge-purple { background: #8957e533; color: var(--purple); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin: 0.8rem 0; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.8rem; margin: 0.8rem 0; }
+  .box { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; }
+  .box h4 { font-size: 0.95rem; margin-bottom: 0.3rem; }
+  .box p, .box li { font-size: 0.82rem; margin: 0.2rem 0; }
+  .box ul { margin: 0.3rem 0 0 1.2rem; }
+  .compare-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 0.8rem 0; }
+  .compare-box { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; }
+  .compare-box.before { border-left: 3px solid var(--red); }
+  .compare-box.after { border-left: 3px solid var(--green); }
+  .metric { font-size: 1.4rem; font-weight: 700; color: var(--heading); }
+  .metric-label { font-size: 0.75rem; opacity: 0.6; }
+  .phase-box { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; margin: 1rem 0; }
+  .phase-box h4 { margin-top: 0; }
+  ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+  li { margin-bottom: 0.3rem; }
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1.5rem 0; }
+  .toc ul { list-style: none; margin: 0; padding: 0; }
+  .toc li { margin: 0.3rem 0; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.2rem 0; text-align: center; overflow-x: auto; }
+  .mermaid svg { max-width: 100%; height: auto; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  @media (max-width: 700px) { body { padding: 1rem; } .grid2, .grid3, .compare-row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#1f6feb',
+      primaryTextColor: '#f0f6fc',
+      primaryBorderColor: '#30363d',
+      lineColor: '#58a6ff',
+      secondaryColor: '#238636',
+      tertiaryColor: '#161b22',
+      background: '#161b22',
+      mainBkg: '#161b22',
+      nodeBorder: '#30363d',
+      clusterBkg: '#0d1117',
+      clusterBorder: '#30363d',
+      titleColor: '#f0f6fc',
+      edgeLabelBackground: '#161b22',
+      fontSize: '13px'
+    },
+    flowchart: { curve: 'basis', padding: 15, htmlLabels: true }
+  });
+</script>
+
+<h1>FusionRoute+MoT 优化方案</h1>
+<p class="subtitle">
+  从"质量增强"升级为"完整推理调度系统"<br>
+  取代 Hermes Router + 4D Perception Matrix + 10-Step Pipeline
+</p>
+<div class="meta">
+  <span>版本: v1.0</span>
+  <span>日期: 2026-09-01</span>
+  <span>作者: Alex Chuang</span>
+  <span>分支: fusionroutemot</span>
+</div>
+
+<div class="toc">
+  <strong>目录</strong>
+  <ul>
+    <li><a href="#s0">0. Executive Summary</a></li>
+    <li><a href="#s1">1. 现状差距分析</a></li>
+    <li><a href="#s2">2. 目标架构：FusionRoute v2</a></li>
+    <li><a href="#s3">3. 六阶段实施计划</a></li>
+    <li><a href="#s4">4. 与 Hermes/4D/10-Step 对比</a></li>
+    <li><a href="#s5">5. 资源需求与分工</a></li>
+    <li><a href="#s6">6. 风险与缓解</a></li>
+    <li><a href="#s7">7. 成功指标</a></li>
+  </ul>
+</div>
+
+<!-- ====== 0 ====== -->
+<h2 id="s0">0. Executive Summary</h2>
+
+<div class="callout success">
+  <strong>一句话结论：</strong> FusionRoute+MoT 不只是"更好的 Router"，而是"完整的推理调度系统"。它用 token-level 路由 + 系统感知取代 Hermes，用零延迟特征收集取代 4D Matrix，用 4 步并行 + 自动容错取代 10-Step Pipeline。
+</div>
+
+<div class="grid3">
+  <div class="box">
+    <h4>🎯 替代 Hermes</h4>
+    <p>Token-level 路由 + FeatureSchema，零延迟（&lt;1ms vs LLM 推理延迟），确定性输出。</p>
+  </div>
+  <div class="box">
+    <h4>⚡ 替代 4D Matrix</h4>
+    <p>PerceptionLayer 实时采集 Network/Hardware/Model/Runtime 四维特征，无需 LLM 建议。</p>
+  </div>
+  <div class="box">
+    <h4>🔄 替代 10-Step</h4>
+    <p>4 步并行 + 自动 ROI 门控 + P2P 自动发现，更快、更简单、自动恢复。</p>
+  </div>
+</div>
+
+<table>
+  <tr><th>维度</th><th>Hermes Router</th><th>4D Perception</th><th>10-Step Pipeline</th><th><strong>FusionRoute v2</strong></th></tr>
+  <tr><td>路由粒度</td><td>Query-level</td><td>LLM 建议</td><td>静态规则</td><td><span class="badge badge-green">Token-level</span></td></tr>
+  <tr><td>决策延迟</td><td>LLM 推理延迟</td><td>LLM 推理延迟</td><td>串行 10 步</td><td><span class="badge badge-green">&lt; 1ms</span></td></tr>
+  <tr><td>确定性</td><td>LLM 输出不确定</td><td>LLM 输出不确定</td><td>规则确定</td><td><span class="badge badge-green">可验证</span></td></tr>
+  <tr><td>KV 管理</td><td>无</td><td>无</td><td>无</td><td><span class="badge badge-green">KV Translation</span></td></tr>
+  <tr><td>自动容错</td><td>手动</td><td>手动</td><td>手动 fallback</td><td><span class="badge badge-green">ROI 自动门控</span></td></tr>
+  <tr><td>设备发现</td><td>HTTP 轮询</td><td>HTTP 轮询</td><td>配置文件</td><td><span class="badge badge-green">P2P mesh</span></td></tr>
+</table>
+
+<!-- ====== 1 ====== -->
+<h2 id="s1">1. 现状差距分析</h2>
+
+<h3>1.1 当前 FusionRoute+MoT 已完成</h3>
+
+<table>
+  <tr><th>能力</th><th>状态</th><th>说明</th></tr>
+  <tr><td>Token-level 路由</td><td><span class="badge badge-green">✅ 已实现</span></td><td>Qwen3Router, 2 专家</td></tr>
+  <tr><td>Complementary Logit</td><td><span class="badge badge-green">✅ 已实现</span></td><td>z_fuse = z_expert + α·c</td></tr>
+  <tr><td>KV Translation 岭回归</td><td><span class="badge badge-green">✅ 已实现</span></td><td>cosine 0.995 (合成数据)</td></tr>
+  <tr><td>校准管线</td><td><span class="badge badge-green">✅ 已实现</span></td><td>Mac 一键执行</td></tr>
+  <tr><td>CDPO 训练</td><td><span class="badge badge-green">✅ 已实现</span></td><td>CPU-only 验证通过</td></tr>
+  <tr><td>Freebuff 数据采集</td><td><span class="badge badge-green">✅ 已实现</span></td><td>215 prompts, 414 CDPO, 202 SFT</td></tr>
+</table>
+
+<h3>1.2 缺什么才能取代 Hermes + 4D + 10-Step</h3>
+
+<table>
+  <tr><th>缺失能力</th><th>对应组件</th><th>优先级</th><th>Phase</th></tr>
+  <tr><td>实时延迟感知</td><td>D1 Network (RTT, bandwidth)</td><td><span class="badge badge-red">P0</span></td><td>Phase 1</td></tr>
+  <tr><td>硬件感知路由</td><td>D2 Hardware (RAM, GPU, CPU)</td><td><span class="badge badge-red">P0</span></td><td>Phase 1</td></tr>
+  <tr><td>模型感知路由</td><td>D3 Model (params, MoE, MTP)</td><td><span class="badge badge-red">P0</span></td><td>Phase 1</td></tr>
+  <tr><td>运行时感知路由</td><td>D4 Runtime (load, memory pressure)</td><td><span class="badge badge-red">P0</span></td><td>Phase 1</td></tr>
+  <tr><td>动态热度跟踪</td><td>Colibrì expert heat</td><td><span class="badge badge-yellow">P1</span></td><td>Phase 2</td></tr>
+  <tr><td>Speculation ROI 门控</td><td>Colibrì acceptance tracker</td><td><span class="badge badge-yellow">P1</span></td><td>Phase 4</td></tr>
+  <tr><td>多节点负载均衡</td><td>10-Step Pipeline 调度</td><td><span class="badge badge-yellow">P1</span></td><td>Phase 2</td></tr>
+  <tr><td>故障转移</td><td>10-Step Pipeline fallback</td><td><span class="badge badge-yellow">P1</span></td><td>Phase 2</td></tr>
+  <tr><td>P2P 设备发现</td><td>Exo + iroh-net</td><td><span class="badge badge-blue">P2</span></td><td>Phase 5</td></tr>
+  <tr><td>模型分片</td><td>Exo model sharding</td><td><span class="badge badge-blue">P2</span></td><td>Phase 5</td></tr>
+</table>
+
+<!-- ====== 2 ====== -->
+<h2 id="s2">2. 目标架构：FusionRoute v2</h2>
+
+<div class="mermaid">
+graph TB
+    subgraph PERCEPTION["Perception Layer 取代 4D Matrix"]
+        direction LR
+        D1["D1: Network RTT/BW"]
+        D2["D2: Hardware RAM/GPU"]
+        D3["D3: Model MoE/MTP"]
+        D4["D4: Runtime Load/Mem"]
+    end
+    subgraph ROUTER["FusionRoute Router 取代 Hermes"]
+        direction LR
+        R1["Qwen3Router hidden to scores"]
+        R2["FeatureSchema conditioning"]
+        R3["CDPO trained on real metrics"]
+    end
+    subgraph POLICY["RoutePolicyV2"]
+        direction LR
+        P1["route_mode: cache/local/edge/cloud"]
+        P2["draft_mode: off/mtp/grammar/hybrid"]
+        P3["residency: full/warm/streamed"]
+        P4["confidence: 0.0 to 1.0"]
+    end
+    subgraph KVT["KV Translation MoT Core"]
+        direction LR
+        K1["RidgeKVMapper"]
+        K2["O n linear mapping"]
+        K3["跳过 O n2 prefill"]
+    end
+    subgraph EXEC["Execution Layer 取代 10-Step"]
+        direction LR
+        E1["CGC Edge Server"]
+        E2["Expert Cache"]
+        E3["PD Coordinator"]
+        E4["Exo plus iroh-net P2P"]
+    end
+    D1 and D2 and D3 and D4 --> R1
+    R1 --> P1 and P2 and P3 and P4
+    P1 --> K1
+    K1 --> E1 and E2
+    E3 --> E1 and E2
+    E4 --> E3
+    style PERCEPTION fill:#161b22,stroke:#d29922
+    style ROUTER fill:#161b22,stroke:#58a6ff
+    style POLICY fill:#161b22,stroke:#3fb950
+    style KVT fill:#161b22,stroke:#bc8cff
+    style EXEC fill:#161b22,stroke:#db6d28
+    style D1 fill:#d2992233,stroke:#d29922,color:#f0f6fc
+    style D2 fill:#d2992233,stroke:#d29922,color:#f0f6fc
+    style D3 fill:#d2992233,stroke:#d29922,color:#f0f6fc
+    style D4 fill:#d2992233,stroke:#d29922,color:#f0f6fc
+    style R1 fill:#1f6feb33,stroke:#58a6ff,color:#f0f6fc
+    style R2 fill:#1f6feb33,stroke:#58a6ff,color:#f0f6fc
+    style R3 fill:#1f6feb33,stroke:#58a6ff,color:#f0f6fc
+    style P1 fill:#23863633,stroke:#3fb950,color:#f0f6fc
+    style P2 fill:#23863633,stroke:#3fb950,color:#f0f6fc
+    style P3 fill:#23863633,stroke:#3fb950,color:#f0f6fc
+    style P4 fill:#23863633,stroke:#3fb950,color:#f0f6fc
+    style K1 fill:#8957e533,stroke:#bc8cff,color:#f0f6fc
+    style K2 fill:#8957e533,stroke:#bc8cff,color:#f0f6fc
+    style K3 fill:#8957e533,stroke:#bc8cff,color:#f0f6fc
+    style E1 fill:#db6d2833,stroke:#db6d28,color:#f0f6fc
+    style E2 fill:#db6d2833,stroke:#db6d28,color:#f0f6fc
+    style E3 fill:#db6d2833,stroke:#db6d28,color:#f0f6fc
+    style E4 fill:#db6d2833,stroke:#db6d28,color:#f0f6fc
+</div>
+
+<h3>2.1 数据流</h3>
+
+<div class="mermaid">
+sequenceDiagram
+    participant U as User Request
+    participant P as PerceptionLayer
+    participant R as SmartRouter
+    participant KV as KV Translation
+    participant A as Expert A Qwen3.6
+    participant B as Expert B Ornith-1.5
+    participant G as SpeculationGuard
+
+    U->>P: prompt + system state
+    P->>P: collect 4D features latency less than 1ms
+    P->>R: FeatureSchema
+    R->>R: hidden state plus features to scores
+    R->>R: generate RoutePolicyV2
+    R->>G: check ROI
+    alt ROI positive
+        G->>A or B: speculate with MTP
+        A or B->>G: accept rate feedback
+    else ROI negative
+        G->>A or B: disable speculation
+    end
+    alt expert switch
+        R->>KV: translate KV cache
+        KV->>B: translated KV
+    end
+    A or B->>U: token stream
+</div>
+
+<!-- ====== 3 ====== -->
+<h2 id="s3">3. 六阶段实施计划</h2>
+
+<h3>Phase 1: 4D 感知层 (Week 1-2)</h3>
+
+<div class="phase-box">
+  <h4><span class="badge badge-red">P0</span> 目标：让 Router 看到系统状态</h4>
+  <p>扩展 FeatureSchema，加入实时系统指标。每个 edge_server 上报 DeviceProfile。Router 输入从 <code>[hidden_state]</code> 变为 <code>[hidden_state + feature_vector]</code>。</p>
+  
+  <div class="grid2">
+    <div class="box">
+      <h4>做什么</h4>
+      <ul>
+        <li>实现 <code>PerceptionLayer</code> 类</li>
+        <li>收集 D1-D4 四维特征</li>
+        <li>每次路由决策附带完整特征向量</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h4>验收标准</h4>
+      <ul>
+        <li>FeatureSchema 包含 4D 所有维度</li>
+        <li>特征采集延迟 &lt; 1ms</li>
+        <li>特征向量可序列化为 JSON</li>
+      </ul>
+    </div>
+  </div>
+
+  <pre><code># 新增: src/fusion_route/perception.py
+class PerceptionLayer:
+    def collect_features(self) -> FeatureSchema:
+        return FeatureSchema(
+            # D1: Network
+            network_rtt_ms=self.measure_rtt(),
+            bandwidth_mbps=self.measure_bandwidth(),
+            # D2: Hardware
+            total_ram_gb=psutil.virtual_memory().total / 1e9,
+            available_ram_gb=psutil.virtual_memory().available / 1e9,
+            gpu_vram_gb=self.get_gpu_vram(),
+            cpu_load_pct=psutil.cpu_percent(),
+            # D3: Model
+            model_params_b=self.model.params,
+            is_moe=self.model.is_moe,
+            has_mtp=self.model.has_mtp,
+            # D4: Runtime
+            memory_pressure=self.get_memory_pressure(),
+            expert_hit_rate=self.expert_cache.hit_rate,
+            accept_rate_ema=self.mtp.accept_rate,
+        )</code></pre>
+</div>
+
+<h3>Phase 2: 智能路由 (Week 3-4)</h3>
+
+<div class="phase-box">
+  <h4><span class="badge badge-red">P0</span> 目标：Router 根据系统状态做路由决策</h4>
+  <p>路由决策从"选专家"扩展为"选模式+专家+策略"。实现 RoutePolicyV2 输出。实现硬门控。</p>
+  
+  <div class="grid2">
+    <div class="box">
+      <h4>做什么</h4>
+      <ul>
+        <li>实现 <code>SmartRouter</code> 类</li>
+        <li>输出 RoutePolicyV2 (mode + target + draft + confidence)</li>
+        <li>内存不足时自动切换端云模式</li>
+        <li>网络延迟高时自动切换纯端模式</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h4>验收标准</h4>
+      <ul>
+        <li>路由决策包含 mode + target + draft + confidence</li>
+        <li>内存不足时自动切换端云模式</li>
+        <li>Accept rate 低时自动关闭 speculation</li>
+      </ul>
+    </div>
+  </div>
+
+  <pre><code># RoutePolicyV2 输出结构
+{
+  "route_mode": "cache_hit | local_only | edge_pivot | cloud_only",
+  "draft_mode": "off | mtp | grammar_json | hybrid",
+  "draft_depth": 0,
+  "residency_policy": "full_resident | warm | streamed",
+  "prefetch_policy": "off | conservative | aggressive",
+  "fallback_policy": "cloud_only | plain_mtp | disable_spec",
+  "confidence": 0.86,
+  "reason": "当前 JSON 约束请求 grammar_accept_rate 高"
+}</code></pre>
+</div>
+
+<h3>Phase 3: KV Translation 生产化 (Week 5-6)</h3>
+
+<div class="phase-box">
+  <h4><span class="badge badge-yellow">P1</span> 目标：从合成数据升级为真实模型校准</h4>
+  <p>Mac 上跑真实校准（Qwen3.6 + Ornith-1.5），拟合真实映射矩阵，集成到 CGC engine。</p>
+  
+  <div class="grid2">
+    <div class="box">
+      <h4>做什么</h4>
+      <ul>
+        <li>Mac 上跑 500 条校准序列</li>
+        <li>拟合真实 W_ridge 映射矩阵</li>
+        <li>集成到 llama-expert-cache.cpp</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h4>验收标准</h4>
+      <ul>
+        <li>真实模型 cosine &gt; 0.95</li>
+        <li>KV Translation 延迟 &lt; 300ms</li>
+        <li>集成到 CGC engine 无 crash</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<h3>Phase 4: Speculation ROI 门控 (Week 7-8)</h3>
+
+<div class="phase-box">
+  <h4><span class="badge badge-yellow">P1</span> 目标：让 speculation "earn its keep"</h4>
+  <p>跟踪 accept rate、draft cost、verify cost。计算 ROI。ROI &lt; 0 时自动关闭 speculation。</p>
+  
+  <pre><code># SpeculationGuard 核心逻辑
+class SpeculationGuard:
+    def should_speculate(self) -> bool:
+        if self.roi_ema < 0:
+            return False  # speculation 亏本，关闭
+        if self.accept_rate_ema < 0.5:
+            return False  # accept rate 太低
+        return True
+    
+    def get_draft_depth(self) -> int:
+        if self.roi_ema > 2.0:
+            return 4  # 高 ROI，激进 draft
+        elif self.roi_ema > 0.5:
+            return 2  # 中等 ROI，保守 draft
+        else:
+            return 0  # 低 ROI，关闭</code></pre>
+</div>
+
+<h3>Phase 5: Exo + iroh-net P2P (Week 9-10)</h3>
+
+<div class="phase-box">
+  <h4><span class="badge badge-blue">P2</span> 目标：设备发现和路由升级为 P2P mesh</h4>
+  <p>用 iroh-net 替换 HTTP heartbeat。用 Exo 做模型分片。整合到 CGC discovery。</p>
+  
+  <div class="grid2">
+    <div class="box">
+      <h4>做什么</h4>
+      <ul>
+        <li>iroh-net P2P 设备发现</li>
+        <li>Exo 模型分片（大模型跨设备）</li>
+        <li>整合到 CGC discovery</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h4>验收标准</h4>
+      <ul>
+        <li>P2P 发现延迟 &lt; 100ms</li>
+        <li>设备上下线自动感知</li>
+        <li>模型分片跨设备推理无 crash</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<h3>Phase 6: 端到端联调 (Week 11-12)</h3>
+
+<div class="phase-box">
+  <h4><span class="badge badge-yellow">P1</span> 目标：全组件联调，验证完整流程</h4>
+  <p>Mac + Windows + 鸿蒙 PC + 鸿蒙手机四机联调。跑 Terminal-Bench 验证 Agent 能力。</p>
+  
+  <div class="callout warn">
+    <strong>验收标准：</strong>
+    <ul>
+      <li>四机 PD 分离推理成功</li>
+      <li>KV Translation 跨机工作</li>
+      <li>Speculation ROI 门控生效</li>
+      <li>Agent Harness 端到端任务完成率 &gt; 60%</li>
+      <li>稳态速度 Mac 20+ t/s, 手机 2+ t/s</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ====== 4 ====== -->
+<h2 id="s4">4. 与 Hermes/4D/10-Step 对比</h2>
+
+<h3>4.1 vs Hermes Router</h3>
+
+<div class="compare-row">
+  <div class="compare-box before">
+    <h4>❌ Hermes Router</h4>
+    <ul>
+      <li>Query-level 路由（整 query 选一个模型）</li>
+      <li>静态 FeatureSchema（model_size, RTT, TFLOPS）</li>
+      <li>SFT on rules（学习硬编码规则）</li>
+      <li>无 KV 管理</li>
+      <li>固定 speculation 策略</li>
+    </ul>
+  </div>
+  <div class="compare-box after">
+    <h4>✅ FusionRoute v2</h4>
+    <ul>
+      <li><strong>Token-level</strong> 路由（每个 token 独立选择）</li>
+      <li><strong>动态</strong> FeatureSchema + hidden state</li>
+      <li><strong>CDPO</strong> on real metrics（学习真实系统状态）</li>
+      <li><strong>KV Translation</strong>（O(n) 线性映射）</li>
+      <li><strong>动态 ROI 门控</strong>（自动开关 speculation）</li>
+    </ul>
+  </div>
+</div>
+
+<h3>4.2 vs 4D Perception Matrix</h3>
+
+<div class="compare-row">
+  <div class="compare-box before">
+    <h4>❌ 4D Perception Matrix</h4>
+    <ul>
+      <li>LLM 参与决策（建议器）</li>
+      <li>需要额外 LLM 推理延迟</li>
+      <li>LLM 输出不确定（需契约投影）</li>
+      <li>高成本（每次推理都要 LLM）</li>
+    </ul>
+  </div>
+  <div class="compare-box after">
+    <h4>✅ FusionRoute v2 PerceptionLayer</h4>
+    <ul>
+      <li><strong>确定性</strong>特征收集（无 LLM）</li>
+      <li><strong>零延迟</strong>（&lt;1ms，纯系统调用）</li>
+      <li><strong>可验证</strong>输出（Router 直接决策）</li>
+      <li><strong>零额外成本</strong></li>
+    </ul>
+  </div>
+</div>
+
+<h3>4.3 vs 10-Step Pipeline</h3>
+
+<div class="compare-row">
+  <div class="compare-box before">
+    <h4>❌ 10-Step Pipeline</h4>
+    <ul>
+      <li>10 步串行（慢）</li>
+      <li>静态规则调度</li>
+      <li>手动 fallback</li>
+      <li>加节点需改配置</li>
+    </ul>
+  </div>
+  <div class="compare-box after">
+    <h4>✅ FusionRoute v2</h4>
+    <ul>
+      <li><strong>4 步并行</strong>（快）</li>
+      <li><strong>动态 Router</strong>（实时决策）</li>
+      <li><strong>自动 ROI 门控</strong>（自动恢复）</li>
+      <li><strong>P2P 自动发现</strong>（零配置）</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ====== 5 ====== -->
+<h2 id="s5">5. 资源需求与分工</h2>
+
+<h3>5.1 本机可做的 vs 需要 Mac 的</h3>
+
+<div class="grid2">
+  <div class="box">
+    <h4>✅ 本机可做 (Windows 8GB)</h4>
+    <ul>
+      <li>代码开发（全部 Phase）</li>
+      <li>单元测试（WSL2）</li>
+      <li>CDPO 训练（mock 数据）</li>
+      <li>PerceptionLayer 实现</li>
+      <li>SmartRouter 实现</li>
+      <li>SpeculationGuard 实现</li>
+      <li>iroh-net P2P 原型</li>
+      <li>文档 + 配置</li>
+    </ul>
+    <p><strong>≈ 6-8 周工作量</strong></p>
+  </div>
+  <div class="box">
+    <h4>⏳ 需要 Mac M4</h4>
+    <ul>
+      <li>真实 KV 校准（500 条 × 1024 token）</li>
+      <li>映射矩阵拟合（真实数据）</li>
+      <li>Router CDPO 训练（GPU）</li>
+      <li>端云 KV Translation 联调</li>
+      <li>Benchmark 质量测试</li>
+      <li>速度基准测试</li>
+    </ul>
+    <p><strong>≈ 2-3 周工作量</strong></p>
+  </div>
+</div>
+
+<h3>5.2 时间线</h3>
+
+<div class="mermaid">
+gantt
+    title FusionRoute v2 开发时间线
+    dateFormat YYYY-MM-DD
+    axisFormat %m/%d
+
+    section Phase 1-2: 4D + Router
+    PerceptionLayer         :a1, 2026-09-08, 5d
+    SmartRouter             :a2, after a1, 5d
+    RoutePolicyV2           :a3, after a1, 3d
+
+    section Phase 3: KV Translation
+    Mac KV Calibration      :b1, after a2, 1d
+    Real Mapping Matrix     :b2, after b1, 1d
+    CGC Integration         :b3, after b2, 5d
+
+    section Phase 4: Speculation
+    SpeculationGuard        :c1, after a2, 5d
+    ROI Tracking            :c2, after c1, 3d
+
+    section Phase 5: P2P
+    iroh-net Discovery      :d1, after b3, 5d
+    Exo Model Sharding      :d2, after d1, 5d
+
+    section Phase 6: Integration
+    4-Machine Test          :e1, after d2, 5d
+    Benchmark               :e2, after e1, 5d
+</div>
+
+<!-- ====== 6 ====== -->
+<h2 id="s6">6. 风险与缓解</h2>
+
+<table>
+  <tr><th>风险</th><th>影响</th><th>缓解</th></tr>
+  <tr>
+    <td>KV Translation cosine &lt; 0.95</td>
+    <td>质量退化</td>
+    <td>增加校准数据量，调 lambda_reg</td>
+  </tr>
+  <tr>
+    <td>P2P 发现延迟高</td>
+    <td>路由决策慢</td>
+    <td>保留 HTTP fallback</td>
+  </tr>
+  <tr>
+    <td>Speculation ROI 为负</td>
+    <td>速度下降</td>
+    <td>自动关闭，回退 plain decode</td>
+  </tr>
+  <tr>
+    <td>四机联调网络不稳定</td>
+    <td>测试失败</td>
+    <td>单机 mock + 真实环境分离</td>
+  </tr>
+  <tr>
+    <td>Ornith-1.5 GGUF 不兼容</td>
+    <td>MTP 失败</td>
+    <td>保留 Nail-denseIQ4X 作为 fallback</td>
+  </tr>
+</table>
+
+<!-- ====== 7 ====== -->
+<h2 id="s7">7. 成功指标</h2>
+
+<table>
+  <tr><th>指标</th><th>当前</th><th>Phase 3 后</th><th>Phase 6 后</th></tr>
+  <tr><td>路由延迟</td><td>N/A</td><td>&lt; 1ms</td><td>&lt; 1ms</td></tr>
+  <tr><td>KV Translation cosine</td><td>0.995 (synthetic)</td><td>&gt; 0.95 (real)</td><td>&gt; 0.95</td></tr>
+  <tr><td>Mac decode 速度</td><td>27 t/s (单模型)</td><td>20-24 t/s (2 专家)</td><td>20-24 t/s</td></tr>
+  <tr><td>Agent 任务完成率</td><td>~50%</td><td>~60%</td><td><strong>&gt; 70%</strong></td></tr>
+  <tr><td>Speculation 自动开关</td><td>手动</td><td>✅ 自动</td><td>✅ 自动</td></tr>
+  <tr><td>P2P 设备发现</td><td>HTTP 轮询</td><td>HTTP + P2P</td><td>✅ P2P mesh</td></tr>
+  <tr><td>故障转移</td><td>手动</td><td>半自动</td><td>✅ 全自动</td></tr>
+</table>
+
+<div class="callout success">
+  <strong>核心价值：</strong> FusionRoute v2 不只是"更好的 Router"，而是"完整的推理调度系统"。它取代 Hermes 的是 token-level 路由 + 系统感知，取代 4D Matrix 的是零延迟特征收集，取代 10-Step Pipeline 的是 4 步并行 + 自动容错。
+</div>
+
+<hr>
+
+<p style="text-align: center; opacity: 0.5; font-size: 0.8rem;">
+  FusionRoute+MoT Optimization Plan v1.0 · CGC Engine · fusionroutemot branch · 2026-09-01
+</p>
+
+</body>
+</html>
