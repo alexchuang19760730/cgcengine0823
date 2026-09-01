@@ -142,6 +142,103 @@ WORKER = {
 }
 WORKER_LOCK = threading.Lock()
 
+# ── Startup benchmark: measured tok/s (populated by _startup_benchmark) ──
+MEASURED_SPEEDS = {
+    "prefill_tok_per_sec": {},   # {model_name: float}
+    "decode_tok_per_sec": {},    # {model_name: float}
+    "accept_pct": 0.0,          # MTP accept rate (0 if no MTP)
+    "load_ms": 0,               # model load time ms
+    "benchmark_s": 0.0,         # total benchmark wall time
+    "ok": False,                # True if benchmark completed
+}
+
+# Standard benchmark prompt (~200 tokens, meaningful prefill+decode measurement)
+_BENCH_PROMPT = (
+    "The coastal observatory recorded steady winds from the northwest throughout "
+    "the morning, and the tide charts suggested a calm crossing for the research "
+    "vessel. Historical records indicate that the old lighthouse was rebuilt three "
+    "times after storms damaged its foundations beyond repair. A team of engineers "
+    "inspected the railway bridge, noting the corrosion on the lower girders and "
+    "scheduling reinforcement work for the coming season. The museum's new exhibition "
+    "traces the development of printing from wooden blocks to movable type and finally "
+    "to industrial presses. Farmers in the valley reported an unusually abundant harvest"
+)
+_BENCH_N_PREDICT = 200  # decode tokens for benchmark
+
+
+def _startup_benchmark():
+    """Run one benchmark probe at startup to measure real prefill + decode tok/s.
+    
+    Uses spawn mode (subprocess) so it works regardless of worker_mode.
+    Populates MEASURED_SPEEDS global dict, consumed by /v1/cgc/profile.
+    """
+    global MEASURED_SPEEDS
+    model_key = os.path.basename(CFG.model).replace(".gguf", "")
+    # Try to find a short model name key for MODEL_PRESETS lookup
+    for key in ("qwen36_35b", "gemma4_26b", "qwen25_7b", "qwen25_15b"):
+        if key.replace("_", "-").lower() in model_key.replace("_", "-").lower():
+            model_key = key
+            break
+
+    print(f"[benchmark] Running startup probe: prompt={len(_BENCH_PROMPT)} chars, "
+          f"n_predict={_BENCH_N_PREDICT} ...")
+    t0 = time.time()
+
+    try:
+        proc = subprocess.Popen(
+            build_cmd(_BENCH_PROMPT, _BENCH_N_PREDICT, seed=42),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+            bufsize=1, env=os.environ.copy(),
+        )
+        err = StderrCollector(proc.stderr)
+        err.start()
+
+        # Drain stdout (tokens)
+        tok_count = 0
+        while True:
+            ch = proc.stdout.read(1)
+            if ch:
+                tok_count += 1
+            elif proc.poll() is not None:
+                break
+            else:
+                time.sleep(0.005)
+        proc.stdout.close()
+        rc = proc.wait()
+        err.join(timeout=10)
+        perf = err.perf()
+
+        elapsed = time.time() - t0
+        MEASURED_SPEEDS["benchmark_s"] = round(elapsed, 2)
+        MEASURED_SPEEDS["ok"] = rc == 0 and "decode_tps" in perf
+
+        if "decode_tps" in perf:
+            MEASURED_SPEEDS["decode_tok_per_sec"][model_key] = perf["decode_tps"]
+        if "prompt_tps" in perf:
+            MEASURED_SPEEDS["prefill_tok_per_sec"][model_key] = perf["prompt_tps"]
+        if "accept_pct" in perf:
+            MEASURED_SPEEDS["accept_pct"] = perf["accept_pct"]
+        if "load_ms" in perf:
+            MEASURED_SPEEDS["load_ms"] = perf["load_ms"]
+
+        # Also store under full model basename for direct profile match
+        full_key = os.path.basename(CFG.model)
+        if "decode_tps" in perf:
+            MEASURED_SPEEDS["decode_tok_per_sec"][full_key] = perf["decode_tps"]
+        if "prompt_tps" in perf:
+            MEASURED_SPEEDS["prefill_tok_per_sec"][full_key] = perf["prompt_tps"]
+
+        decode_tps = perf.get("decode_tps", 0)
+        prompt_tps = perf.get("prompt_tps", 0)
+        accept = perf.get("accept_pct", 0)
+        print(f"[benchmark] OK: prefill={prompt_tps:.1f} t/s, decode={decode_tps:.1f} t/s, "
+              f"accept={accept:.1f}%, load={perf.get('load_ms', 0)}ms, wall={elapsed:.1f}s")
+
+    except Exception as e:
+        MEASURED_SPEEDS["benchmark_s"] = round(time.time() - t0, 2)
+        print(f"[benchmark] FAILED: {e}")
+
 
 def build_cmd(prompt, n_predict, seed=None):
     cmd = [CFG.resolve_binary(), "-m", CFG.model, "-n", str(n_predict),
