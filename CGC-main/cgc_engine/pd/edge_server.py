@@ -81,6 +81,15 @@ try:
 except ImportError:  # 單檔可用：profile 端點降級為 OS 基本探測
     DeviceProfile = None
 
+# PerceptionLayer: 4D feature collection for SmartRouter
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "src"))
+    from fusion_route.smart_router import extract_features, to_flat, SmartRouter
+    from fusion_route.speculation_guard import SpeculationGuard
+    PERCEPTION_AVAILABLE = True
+except ImportError:
+    PERCEPTION_AVAILABLE = False
+
 # 相容兩種輸出：llama-simple "in 5.12 s," / speculative-simple "in 41.800 seconds,"
 PERF_DECODE = re.compile(r"decoded\s+(\d+)\s+tokens\s+in\s+([\d.]+)\s*s(?:econds?)?\s*,\s*speed:\s*([\d.]+)\s*t/s")
 PERF_ACCEPT = re.compile(r"accept\s*=\s*([\d.]+)%")        # speculative-simple
@@ -151,6 +160,9 @@ MEASURED_SPEEDS = {
     "benchmark_s": 0.0,         # total benchmark wall time
     "ok": False,                # True if benchmark completed
 }
+
+# SpeculationGuard: ROI-based MTP gating
+SPEC_GUARD = SpeculationGuard() if PERCEPTION_AVAILABLE else None
 
 # Standard benchmark prompt (~200 tokens, meaningful prefill+decode measurement)
 _BENCH_PROMPT = (
@@ -599,12 +611,66 @@ class Handler(BaseHTTPRequestHandler):
             if DeviceProfile is not None:
                 try:
                     prof = DeviceProfile.detect_local().__dict__
-                except Exception as e:  # noqa: BLE001 — 探測失敗不炸服務
+                except Exception as e:
                     prof = {"detect_error": str(e)}
+            if MEASURED_SPEEDS["ok"]:
+                prof.setdefault("prefill_tok_per_sec", {}).update(MEASURED_SPEEDS["prefill_tok_per_sec"])
+                prof.setdefault("decode_tok_per_sec", {}).update(MEASURED_SPEEDS["decode_tok_per_sec"])
+            features_4d = {}
+            features_flat = []
+            if PERCEPTION_AVAILABLE:
+                try:
+                    import socket
+                    online = True
+                    try:
+                        socket.create_connection(("8.8.8.8", 53), timeout=2)
+                    except (OSError, TimeoutError):
+                        online = False
+                    features_4d = extract_features({
+                        "four_d_matrix": {
+                            "D1_network": {
+                                "rtt_ms": prof.get("network_latency_ms", 50),
+                                "bandwidth_mbps": 1000,
+                                "jitter_ms": 0,
+                                "stability": "stable" if online else "unstable",
+                            },
+                            "D2_hardware": {
+                                "total_mem_gb": prof.get("total_ram_gb", 16),
+                                "avail_mem_gb": prof.get("available_ram_gb", 8),
+                                "gpu_vram_gb": prof.get("gpu_vram_gb", 0),
+                                "tflops_fp16": prof.get("cpu_cores", 4) * 10,
+                                "unified_memory": "apple" in str(prof.get("gpu_type", "")).lower(),
+                            },
+                            "D3_model": {
+                                "draft_model_size_gb": 1.0,
+                                "draft_params_m": 200,
+                                "has_native_mtp": "--mtp" in " ".join(CFG.extra_args),
+                            },
+                            "context": {
+                                "prompt_has_code": False,
+                                "history_accept_rate": MEASURED_SPEEDS.get("accept_pct", 70) / 100.0,
+                                "cache_hit_rate": 0.5,
+                            },
+                        },
+                        "request_context": {"online": online},
+                    })
+                    features_flat = to_flat(features_4d)
+                except Exception as e:
+                    features_4d = {"error": str(e)}
+            # SpeculationGuard stats
+            spec_stats = {}
+            if SPEC_GUARD is not None:
+                spec_stats = SPEC_GUARD.get_stats()
+                spec_decision = SPEC_GUARD.should_use_speculation()
+                spec_stats["decision"] = spec_decision.to_dict()
             self._json({"profile": prof, "model": CFG.model,
                         "ngl": CFG.ngl, "threads": CFG.threads,
                         "worker_mode": CFG.worker_mode,
-                        "worker_slots": CFG.worker_slots})
+                        "worker_slots": CFG.worker_slots,
+                        "benchmark": MEASURED_SPEEDS,
+                        "features_4d": features_4d,
+                        "features_flat": features_flat,
+                        "speculation_guard": spec_stats})
         else:
             self._json({"error": "not found"}, 404)
 
