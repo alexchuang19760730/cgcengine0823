@@ -1,0 +1,41 @@
+=== Top 10 Highest Quality Prompts ===
+[1] score=0.9 | cat=testing
+    prompt: # Windows 端最小接入說明  適用場景：  - Windows 端負責自己的 OpenAI-compatible adapter - Mac 端只提供 `PD discovery + CGC edge` 算力共享端點 - Windo
+
+[2] score=0.9 | cat=testing
+    prompt: # Windows 端最小接入說明  適用場景：  - Windows 端負責自己的 OpenAI-compatible adapter - Mac 端只提供 `PD discovery + CGC edge` 算力共享端點 - Windo
+
+[3] score=0.7 | cat=code_generation
+    prompt: # Windows 端最小接入說明  適用場景：  - Windows 端需要接入 Mac 端的 `CGC edge` 推理服務 - 目前推薦優先使用 `1240` 這條 OpenAI-compatible 服務線 - 若 Windows 
+
+[4] score=0.65 | cat=devops
+    prompt: 結論先給：https://github.com/banyan-god/ttt-e2e-qwen3 原生完全無法在 M4 Mac 端側（TurboFieldfare/llama.cpp Metal 架構）直接執行，僅能跑 NVIDIA 雲端 
+
+[5] score=0.65 | cat=testing
+    prompt: github0823/main (cgcengine0823.git) ✅ pushed 部署包內容 (deploy-harmonyos/) textCopy ├── DEPLOY_GUIDE.md          # 完整雙平台部署指南
+
+[6] score=0.65 | cat=general
+    prompt: 現在可用的是：  - Health    http://192.168.101.87:1237/v1/cgc/health - Resume    http://192.168.101.87:1237/v1/cgc/resume 所以給 W
+
+[7] score=0.65 | cat=debugging
+    prompt: 鸿蒙系统在移植llama-speculative-simple +expert cache+l4 skipload 产生下面的问题定位到一个明确 bug，加上崩溃根因的强假设。先记录结论，再找你确认下一步。  ## 结论：-ngl 30 +
+
+[8] score=0.65 | cat=architecture
+    prompt: Nail‑MTP（Qwen3.6‑35B‑A3B‑MTP）这套GGUF容器（张量key、shape、MTP计算图全部匹配），把里面权重全部替换成Ornith‑1.5‑35B‑A3B的权重，跑出来就等于Ornith‑1.5，能力变强。   但
+
+[9] score=0.6 | cat=general
+    prompt: tb_loop SFT_API_BASE_URL	指向 http://127.0.0.1:1234/v1（本地 Qwen3.6）以及本地 Qwen3.6-35B	⚠️ 需要重新启动是两个不同api ?
+
+[10] score=0.6 | cat=debugging
+    prompt: mac 开发端全部完成： 3ad609309 已推上 github0823/main  请你要更新版本并遵照下面开发 。因為聯調要跑的三個檔案（edge_server.py、pd_e2e_test.py、router.py 的 decode
+
+=== Category Breakdown ===
+  general: 81 prompts, avg_score=0.152
+  devops: 36 prompts, avg_score=0.272
+  testing: 22 prompts, avg_score=0.293
+  code_analysis: 20 prompts, avg_score=0.183
+  ml_inference: 20 prompts, avg_score=0.210
+  architecture: 14 prompts, avg_score=0.261
+  debugging: 9 prompts, avg_score=0.378
+  refactoring: 8 prompts, avg_score=0.325
+  code_generation: 1 prompts, avg_score=0.700
