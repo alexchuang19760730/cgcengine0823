@@ -64,24 +64,44 @@ class RouteDecision:
 # ──────────────────────────────────────────────────────────────────────
 
 MODEL_PRESETS: Dict[str, dict] = {
+    # Qwen3.6-35B-A3B-MTP (Nail denseIQ4X, 13GB)
+    # Mac M4: prefill ~59 t/s, decode ~27 t/s (MTP 95% accept)
     "qwen36_35b": {
-        "params_b": 35.0, "is_moe": True, "num_experts": 64,
-        "experts_per_tok": 8, "num_layers": 64, "hidden_size": 2048,
-        "model_size_gb": 13.0, "per_layer_gb": 0.203,
+        "params_b": 35.0, "is_moe": True, "num_experts": 256,
+        "experts_per_tok": 8, "num_layers": 40, "hidden_size": 2048,
+        "model_size_gb": 13.0, "per_layer_gb": 0.325,
         "has_native_mtp": True,
     },
+    # Ornith-1.5-35B-A3B (IQ3_XXS, 15GB)
+    # Same architecture as Qwen3.6-35B-A3B, KV-compatible
+    "ornith_35b": {
+        "params_b": 35.0, "is_moe": True, "num_experts": 256,
+        "experts_per_tok": 8, "num_layers": 40, "hidden_size": 2048,
+        "model_size_gb": 15.3, "per_layer_gb": 0.383,
+        "has_native_mtp": True,
+    },
+    # Gemma4-26B (MoE, no MTP)
     "gemma4_26b": {
         "params_b": 26.0, "is_moe": True, "num_experts": 64,
         "experts_per_tok": 8, "num_layers": 36, "hidden_size": 3072,
         "model_size_gb": 12.0, "per_layer_gb": 0.333,
         "has_native_mtp": False,
     },
+    # Qwen2.5-7B (dense, small model, fast on any device)
     "qwen25_7b": {
         "params_b": 7.5, "is_moe": False, "num_experts": 0,
         "experts_per_tok": 0, "num_layers": 28, "hidden_size": 3584,
         "model_size_gb": 4.0, "per_layer_gb": 0.143,
         "has_native_mtp": False,
     },
+    # Qwen3-14B (for HarmonyOS phone, IQ4_XS, ~8GB)
+    "qwen3_14b": {
+        "params_b": 14.0, "is_moe": False, "num_experts": 0,
+        "experts_per_tok": 0, "num_layers": 48, "hidden_size": 5120,
+        "model_size_gb": 8.0, "per_layer_gb": 0.167,
+        "has_native_mtp": False,
+    },
+    # Qwen2.5-1.5B (tiny, for edge devices / draft model)
     "qwen25_15b": {
         "params_b": 1.5, "is_moe": False, "num_experts": 0,
         "experts_per_tok": 0, "num_layers": 28, "hidden_size": 1536,
